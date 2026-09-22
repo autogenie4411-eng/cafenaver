@@ -10702,6 +10702,9 @@ const vehicleCatalog = [
   // Google Apps Script를 웹앱으로 배포한 뒤 아래 주소만 교체하세요.
   // 예: https://script.google.com/macros/s/AKfycb.../exec
   const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbN9KUT6PaeO9vvmGYcmLNAM7a6zu5_lDse_P_iilkBzKGOSauNSPcwBGMvgUYUaMP/exec";
+  // 운영 사이트에서 올바른 JS가 로드됐는지 개발자 도구 Console로 확인합니다.
+  const NAVER_CAFE_SCRIPT_VERSION = "NAVER_CAFE_FRONT_20260922_V2";
+  console.info("[네이버카페 견적] 프런트 버전:", NAVER_CAFE_SCRIPT_VERSION);
 
   /* =========================================================
     방문 유입 로그 + 실제 사이트 체류시간 측정
@@ -12677,6 +12680,7 @@ const vehicleCatalog = [
     }
 
     return {
+      submissionSource: "naver_cafe",
       submittedAt: new Date().toLocaleString("ko-KR"),
       vehicleType: state.market === "domestic" ? "국산차" : "수입차",
       brand: state.brandName || pendingText,
@@ -12713,6 +12717,8 @@ const vehicleCatalog = [
     // Apps Script의 e.parameter에서 각 값을 안정적으로 읽을 수 있도록
     // application/x-www-form-urlencoded 형식으로 명시적으로 구성합니다.
     const body = new URLSearchParams({
+      // 네이버카페 견적만 타회사 추가 메일 발송 대상으로 구분합니다.
+      submissionSource: payload.submissionSource,
       submittedAt: payload.submittedAt || "",
       vehicleType: payload.vehicleType || "",
       brand: payload.brand || "",
@@ -12733,6 +12739,9 @@ const vehicleCatalog = [
       visitorId: securityData.visitorId || "확인 불가",
       elapsedSeconds: String(securityData.elapsedSeconds || 0)
     });
+
+    // 개인 정보는 기록하지 않고 전송되는 출처 구분값만 확인합니다.
+    console.info("[네이버카페 견적] 전송 출처:", body.get("submissionSource"));
 
     await fetch(GOOGLE_APPS_SCRIPT_URL, {
       method: "POST",
