@@ -6,24 +6,66 @@
 
   const SOURCE = 'https://www.agautoplan.com/review';
   const READER_PREFIX = 'https://r.jina.ai/';
-  const IMPORT_BRANDS = [
-    '벤츠', '메르세데스', 'BMW', '비엠더블유', '아우디', '볼보', '폭스바겐',
-    '포르쉐', '랜드로버', '레인지로버', '렉서스', '토요타', '도요타', '미니', 'MINI',
-    '테슬라', '폴스타', '지프', '포드', '링컨', '캐딜락', '푸조', '마세라티',
-    '람보르기니', '페라리', '벤틀리', '롤스로이스'
-  ];
-
-  const BRAND_ALIASES = [
-    ['메르세데스-벤츠', ['메르세데스', '벤츠', 'mercedes', 'e200', 'e300', 'e450', 'gle', 'glc', 'gls', 'cla', 'cle', 'amg']],
-    ['BMW', ['bmw', '비엠더블유']], ['아우디', ['아우디', 'audi']], ['볼보', ['볼보', 'volvo']],
-    ['폭스바겐', ['폭스바겐', 'volkswagen']], ['포르쉐', ['포르쉐', 'porsche']],
-    ['랜드로버', ['랜드로버', '레인지로버', 'land rover', 'range rover']], ['렉서스', ['렉서스', 'lexus']],
-    ['토요타', ['토요타', '도요타', 'toyota']], ['MINI', ['mini', '미니']],
-    ['테슬라', ['테슬라', 'tesla', 'model y', 'model 3', '모델 y', '모델y', '모델3']], ['폴스타', ['폴스타', 'polestar']],
-    ['지프', ['지프', 'jeep']], ['포드', ['포드', 'ford']], ['링컨', ['링컨', 'lincoln']],
-    ['캐딜락', ['캐딜락', 'cadillac']], ['푸조', ['푸조', 'peugeot']], ['마세라티', ['마세라티', 'maserati']],
-    ['벤틀리', ['벤틀리', 'bentley']], ['롤스로이스', ['롤스로이스', 'rolls-royce', 'rolls royce']]
-  ];
+  // 후기 분류는 메이커 + 국내/수입 차종명을 함께 검사합니다.
+  // 차종명이 단독으로 나오는 E200, 아토3, 모델Y 등의 후기에도 적용합니다.
+  function reviewMarket(review = {}) {
+    const titleModel = `${review.title || ''} ${review.model || ''}`.toLowerCase();
+    const brand = String(review.brand || '').toLowerCase();
+    const importNames = [
+      '메르세데스', '벤츠', 'mercedes', 'maybach', '마이바흐', 'bmw', '비엠더블유',
+      '아우디', 'audi', '볼보', 'volvo', '폭스바겐', 'volkswagen', '포르쉐', 'porsche',
+      '랜드로버', '레인지로버', 'land rover', 'range rover', '재규어', 'jaguar',
+      '렉서스', 'lexus', '토요타', '도요타', 'toyota', '테슬라', 'tesla', '폴스타', 'polestar',
+      '지프', 'jeep', '포드', 'ford', '링컨', 'lincoln', '캐딜락', 'cadillac',
+      '푸조', 'peugeot', '마세라티', 'maserati', '람보르기니', 'lamborghini',
+      '페라리', 'ferrari', '벤틀리', 'bentley', '롤스로이스', 'rolls-royce',
+      'rolls royce', 'byd', '비야디', '미니', 'mini'
+    ];
+    const importModels = [
+      '올로드콰트로', '콰트로', '이트론', 'e-tron', 'etron', 'xc40', 'xc60', 'xc90', 'ex30', 'ex40',
+      'ec40', 's60', 's90', 'v60', 'v90', '티구안', '아테온', '투아렉', '파사트', '제타',
+      '카이엔', '마칸', '파나메라', '타이칸', '911 카레라', '디펜더', '디스커버리', '이보크',
+      '랭글러', '체로키', '레니게이드', '글래디에이터', '익스플로러', '브롱코',
+      '머스탱', '노틸러스', '에비에이터', '코세어', '에스컬레이드', '리릭',
+      '그레칼레', '기블리', '르반떼', '벤테이가', '컨티넨탈', '플라잉스퍼',
+      '컬리넌', '고스트', '팬텀', '스펙터', '우루스', '우라칸', '레부엘토',
+      '아토3', '돌핀', '푸로산게', '라브4', '프리우스', '알파드', '시에나',
+      '컨트리맨', '클럽맨', '에이스맨', '모델y', '모델 y', '모델3', '모델 3',
+      '모델s', '모델 s', '모델x', '모델 x'
+    ];
+    const domesticNames = ['현대', '기아', '제네시스', '르노', 'kgm', 'kg모빌리티', '쉐보레', 'chevrolet'];
+    const domesticModels = [
+      '펠리세이드','pv5','pv7','qm6','sm6','그랜저','아반떼','쏘나타','소나타','싼타페','투싼','팰리세이드','코나',
+      '캐스퍼','스타리아','아이오닉','포터','봉고','모닝','카니발','쏘렌토',
+      '스포티지','셀토스','니로','토레스','액티언','티볼리','렉스턴','코란도',
+      '아르카나','그랑 콜레오스','그랑콜레오스','트랙스','트레일블레이저',
+      '트래버스','콜로라도','타호','이쿼녹스'
+    ];
+    const word = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 영문 짧은 모델명은 앞뒤 단어 경계를 검사해 오분류를 막는다.
+    const has = (text, keyword) => {
+      if (/[a-z0-9]/i.test(keyword) && keyword.length < 6) {
+        return new RegExp(`(^|[^a-z0-9])${word(keyword)}(?=$|[^a-z0-9])`, 'i').test(text);
+      }
+      if (/^[가-힣]{1,2}$/.test(keyword)) {
+        return new RegExp(`(^|[^가-힣])${word(keyword)}(?=$|[^가-힣])`).test(text);
+      }
+      return text.includes(keyword);
+    };
+    const importShort = [
+      'e200','e220','e250','e300','e350','e450','s350','s400','s450','s500','s580',
+      'c200','c220','c300','eqa','eqb','eqe','eqs','gle','glc','gls','cla','cls','cle','gla','glb','amg',
+      '320i','330i','520i','530i','540i','740i','x1','x2','x3','x4','x5','x6','x7','xm','z4','i4','i5','i7','ix',
+      'a3','a4','a5','a6','a7','a8','q3','q4','q5','q6','q7','q8',
+      'es300','nx','rx','ux','lm','ls','id.4','id.5','atto 3','seal', '씰'
+    ];
+    const domesticShort = ['k3','k5','k8','k9','ev3','ev4','ev5','ev6','ev9','g70','g80','g90','gv60','gv70','gv80','레이'];
+    if (importNames.some(name => has(titleModel, name)) || importModels.some(name => has(titleModel, name)) || importShort.some(name => has(titleModel, name))) return 'import';
+    if (domesticNames.some(name => has(titleModel, name)) || domesticModels.some(name => has(titleModel, name)) || domesticShort.some(name => has(titleModel, name))) return 'domestic';
+    if (importNames.some(name => has(brand, name))) return 'import';
+    if (domesticNames.some(name => has(brand, name))) return 'domestic';
+    return 'unknown';
+  }
 
   const FALLBACK_REVIEWS = [
       {
@@ -174,8 +216,8 @@
 
   const SWIPER_DELAY = 2200; // 한 카드가 머무는 시간(ms)
   const SWIPER_SPEED = 1000; // 옆으로 스르륵 넘어가는 시간(ms)
-  const MAX_REVIEWS = 120;
-  const RECENT_DAYS = 62;
+  // 메인 슬라이더에는 최근 3개월만 사용하고, 전체보기에는 연도별 보관 데이터 전부 사용합니다.
+  const MAX_REVIEWS = 2000;
   const MIN_LOCAL_REVIEWS = 20;
   const SOURCE_LIST_PAGES = 30;
   const SOURCE_MAX_DETAIL_FETCHES = 360;
@@ -184,6 +226,17 @@
   const LOCAL_FRESH_DAYS = 14; // 오래된 JSON을 최신 후기처럼 먼저 노출하지 않는다.
 
   let renderedReviews = [];
+  let allReviews = [];
+  let reviewDialogView = '';
+  let reviewDetailFromList = false;
+  let reviewListScrollTop = 0;
+  let reviewDialog = null;
+  let reviewDialogReturnFocus = null;
+  let reviewHistoryActive = false;
+  let reviewClosingFromPopstate = false;
+  let reviewReturnScroll = null;
+  let activeReviewImages = [];
+  let activeReviewImageIndex = 0;
   let hiddenAfterBrandSelection = false;
   let sourceRefreshStarted = false;
   let reviewSwiper = null;
@@ -202,16 +255,11 @@
 
   function detectBrand(text = '') {
     const lower = String(text).toLowerCase();
-    for (const [label, keywords] of BRAND_ALIASES) {
-      if (keywords.some(keyword => lower.includes(keyword.toLowerCase()))) return label;
-    }
+    const market = reviewMarket({ title: text });
+    if (market === 'import') return '수입차';
+    if (market === 'domestic') return '국산차';
     return '';
   }
-
-  const isImportReview = review => {
-    const haystack = `${review.brand || ''} ${review.title || ''} ${review.model || ''}`.toLowerCase();
-    return IMPORT_BRANDS.some(brand => haystack.includes(brand.toLowerCase())) || Boolean(detectBrand(haystack));
-  };
 
   function parseReviewDate(value) {
     const raw = String(value || '').trim();
@@ -269,26 +317,42 @@
     return `${y}.${m}.${d}`;
   }
 
-  function prepareReviews(items) {
-    const now = new Date();
-    const cutoff = new Date(now);
-    cutoff.setDate(cutoff.getDate() - RECENT_DAYS);
-    cutoff.setHours(0, 0, 0, 0);
+  // 한국 날짜 기준으로 연도 전환을 계산합니다. 1~3월은 전년도+당해 연도,
+  // 4월부터는 당해 연도만 전체보기 목록에 유지합니다.
+  function reviewPeriod(today = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric'
+    }).formatToParts(today);
+    const part = type => Number(parts.find(item => item.type === type)?.value);
+    const year = part('year');
+    const month = part('month');
+    const day = part('day');
+    const firstYear = month <= 3 ? year - 1 : year;
+    // setMonth()를 그대로 쓰면 31일 기준 월말이 다음 달로 넘어갈 수 있어 보정합니다.
+    const targetMonthIndex = month - 1 - 3;
+    const lastDayInTargetMonth = new Date(year, targetMonthIndex + 1, 0).getDate();
+    const rollingStart = new Date(year, targetMonthIndex, Math.min(day, lastDayInTargetMonth));
+    rollingStart.setHours(0, 0, 0, 0);
+    return {
+      year,
+      firstYear,
+      archiveStart: new Date(firstYear, 0, 1).getTime(),
+      rollingStart: rollingStart.getTime(),
+      todayEnd: new Date(year, month - 1, day, 23, 59, 59, 999).getTime()
+    };
+  }
 
-    // GitHub Actions가 /review 게시판에서 수집한 순서를 그대로 사용한다.
-    // 날짜로 다시 sort하지 않아 실제 후기 카테고리의 최신 → 과거 순서가 뒤섞이지 않는다.
+  function prepareReviews(items) {
+    const period = reviewPeriod();
     const prepared = (items || [])
       .filter(review => Boolean(review?.title))
-      // 국산차 전용 사이트이므로 수입차 후기는 화면에서 제외합니다.
-      // reviews.json 또는 원본 게시판에 수입차 후기가 섞여 있어도 노출되지 않습니다.
-      .filter(review => !isImportReview(review))
+      // 기존 네이버용 국산차 필터를 그대로 적용합니다.
+      .filter(review => reviewMarket(review) === 'domestic')
       .map((review, inputOrder) => ({ ...review, _inputOrder: inputOrder, _timestamp: reviewTimestamp(review) }))
-      .filter(review => review._timestamp >= cutoff.getTime())
-      .sort((a, b) => {
-        const ao = Number.isFinite(Number(a.sourceOrder)) ? Number(a.sourceOrder) : a._inputOrder;
-        const bo = Number.isFinite(Number(b.sourceOrder)) ? Number(b.sourceOrder) : b._inputOrder;
-        return ao - bo;
-      });
+      .filter(review => review._timestamp >= period.archiveStart && review._timestamp <= period.todayEnd)
+      .sort((a, b) => b._timestamp - a._timestamp ||
+        (Number.isFinite(+a.sourceOrder) ? +a.sourceOrder : a._inputOrder) -
+        (Number.isFinite(+b.sourceOrder) ? +b.sourceOrder : b._inputOrder));
 
     const seen = new Set();
     const unique = [];
@@ -301,6 +365,11 @@
       if (unique.length >= MAX_REVIEWS) break;
     }
     return unique;
+  }
+
+  function rollingReviews(items) {
+    const cutoff = reviewPeriod().rollingStart;
+    return (items || []).filter(review => reviewTimestamp(review) >= cutoff);
   }
 
   function detailLines(review) {
@@ -326,7 +395,7 @@
     const lines = detailLines(review);
     const formattedDate = formatReviewDate(review.date);
     return `<article class="swiper-slide review-card" data-review-id="${escapeHtml(review.id)}">
-      <a class="review-card__link" href="${escapeHtml(review.url)}" target="_blank" rel="noopener noreferrer">
+      <a class="review-card__link" href="#review-detail" data-review-open="${escapeHtml(review.id)}">
         ${imageMarkup(review)}
         <div class="review-card__body">
           <strong class="review-card__title">${escapeHtml(cleanReviewTitle(review.title))}</strong>
@@ -337,6 +406,299 @@
       </a>
     </article>`;
   }
+
+  function validReviewImages(review) {
+    return [...new Set([...(Array.isArray(review.images) ? review.images : []), review.image].filter(url =>
+      typeof url === 'string' && /^https?:\/\//i.test(url) && !/javascript:/i.test(url)
+    ))].slice(0, 150);
+  }
+
+  function showReviewImage(index) {
+    if (!activeReviewImages.length || !reviewDialog) return;
+    activeReviewImageIndex = (index + activeReviewImages.length) % activeReviewImages.length;
+    const image = reviewDialog.querySelector('[data-review-main-image]');
+    image.src = activeReviewImages[activeReviewImageIndex];
+    image.alt = `출고 후기 사진 ${activeReviewImageIndex + 1}`;
+    reviewDialog.querySelector('[data-review-image-count]').textContent = `${activeReviewImageIndex + 1} / ${activeReviewImages.length}`;
+    reviewDialog.querySelectorAll('[data-review-thumb]').forEach((el, i) => {
+      el.classList.toggle('is-selected', i === activeReviewImageIndex);
+      el.setAttribute('aria-pressed', String(i === activeReviewImageIndex));
+    });
+  }
+
+  // 팝업을 열기 전 위치를 기억하고 닫힐 때 동일한 위치로 복원한다.
+  // popstate에서 메인 견적 단계의 스크롤 이동 코드가 실행되지 않도록
+  // 후기 전용 히스토리 이벤트는 캡처 단계에서 먼저 처리한다.
+  function restoreReviewScroll() {
+    if (!reviewReturnScroll) return;
+    const { x, y } = reviewReturnScroll;
+    window.scrollTo(x, y);
+    requestAnimationFrame(() => window.scrollTo(x, y));
+  }
+
+  function ensureReviewDialog() {
+    if (reviewDialog) return reviewDialog;
+    reviewDialog = document.createElement('dialog');
+    reviewDialog.className = 'autogenie-review-dialog';
+    reviewDialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
+    document.body.appendChild(reviewDialog);
+    reviewDialog.addEventListener('click', event => {
+      if (event.target === reviewDialog || event.target.closest('[data-review-close]')) {
+        closeReviewDialog();
+        return;
+      }
+      if (event.target.closest('[data-review-back-list]')) {
+        showAllReviews(true);
+        return;
+      }
+      const link = event.target.closest('[data-review-open]');
+      if (link) {
+        event.preventDefault();
+        const review = allReviews.find(item => reviewKey(item) === link.dataset.reviewOpen);
+        if (review) {
+          reviewListScrollTop = reviewDialog.querySelector('.review-all-scroll')?.scrollTop || 0;
+          reviewDetailFromList = true;
+          openReview(review);
+        }
+        return;
+      }
+      const direction = event.target.closest('[data-review-image-shift]');
+      if (direction) showReviewImage(activeReviewImageIndex + Number(direction.dataset.reviewImageShift));
+      const thumb = event.target.closest('[data-review-thumb]');
+      if (thumb) showReviewImage(Number(thumb.dataset.reviewThumb));
+    });
+    reviewDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeReviewDialog();
+    });
+    reviewDialog.addEventListener('close', () => {
+      document.body.classList.remove('review-dialog-open');
+      if (reviewDialogReturnFocus?.isConnected) reviewDialogReturnFocus.focus({ preventScroll: true });
+      restoreReviewScroll();
+      // X/ESC/바깥 클릭: 후기 전용 히스토리만 되돌린다.
+      // reviewHistoryActive는 popstate에서 해제해야 견적 단계 변경을 막을 수 있다.
+      if (reviewHistoryActive && !reviewClosingFromPopstate) history.back();
+      reviewClosingFromPopstate = false;
+    });
+    return reviewDialog;
+  }
+
+  function showReviewDialog(dialog) {
+    if (!dialog.open) {
+      reviewReturnScroll = { x: window.scrollX, y: window.scrollY };
+      reviewDialogReturnFocus = document.activeElement;
+      history.pushState({ ...((history.state && typeof history.state === 'object') ? history.state : {}), autogenieReviewDialog: true }, '', location.href);
+      reviewHistoryActive = true;
+      dialog.showModal();
+    }
+    document.body.classList.add('review-dialog-open');
+  }
+
+  function allReviewCard(review) {
+    const title = escapeHtml(cleanReviewTitle(review.title));
+    const date = escapeHtml(formatReviewDate(review.date));
+    const photo = String(review.image || '').trim();
+    return `<a class="review-all-card" href="#review-detail" data-review-open="${escapeHtml(reviewKey(review))}">
+      <span class="review-all-card__photo">${photo ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="review-all-card__empty">후기 이미지 준비 중</span>'}</span>
+      <span class="review-all-card__info"><strong>${title}</strong><time>${date}</time><span class="review-all-card__link">후기 보기 →</span></span>
+    </a>`;
+  }
+
+  function showAllReviews(restoreScroll = false) {
+    const dialog = ensureReviewDialog();
+    const { year, firstYear } = reviewPeriod();
+    const periodTitle = firstYear < year ? `${firstYear}~${year}년 출고 후기` : `${year}년 출고 후기`;
+    if (!restoreScroll) {
+      reviewListScrollTop = 0;
+      reviewDetailFromList = false;
+    }
+    reviewDialogView = 'list';
+    dialog.setAttribute('aria-label', '오토지니 전체 출고 후기 목록');
+    dialog.innerHTML = `<div class="review-detail-panel review-all-panel">
+      <header class="review-detail-head"><div><span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
+      <h2>${escapeHtml(periodTitle)}</h2><p class="review-all-count">국산차 출고 후기 ${allReviews.length}건</p></div>
+      <button type="button" class="review-detail-close" data-review-close aria-label="전체 후기 닫기">×</button></header>
+      <div class="review-detail-scroll review-all-scroll">
+        ${allReviews.length ? `<div class="review-all-grid">${allReviews.map(allReviewCard).join('')}</div>` : '<p class="review-all-empty">해당 기간에 등록된 출고 후기가 없습니다.</p>'}
+      </div>
+    </div>`;
+    showReviewDialog(dialog);
+    dialog.querySelector('.review-all-scroll').scrollTop = restoreScroll ? reviewListScrollTop : 0;
+    dialog.querySelectorAll('.review-all-card__photo img').forEach(img => {
+      img.addEventListener('error', () => {
+        const slot = img.closest('.review-all-card__photo');
+        if (slot) slot.innerHTML = '<span class="review-all-card__empty">후기 이미지 준비 중</span>';
+      }, { once: true });
+    });
+  }
+
+  function closeReviewDialog() {
+    if (reviewDialog?.open) reviewDialog.close();
+  }
+
+  window.addEventListener('popstate', event => {
+    if (!reviewHistoryActive) return;
+    // 견적 스크립트의 popstate가 render() / scrollToEstimate()를 호출하지 않게 차단.
+    event.stopImmediatePropagation();
+    reviewHistoryActive = false;
+    reviewClosingFromPopstate = true;
+    if (reviewDialog?.open) reviewDialog.close();
+    else {
+      reviewClosingFromPopstate = false;
+      restoreReviewScroll();
+    }
+  }, true);
+
+  // GitHub Actions가 저장한 원본 후기 HTML을 브라우저에서도 한 번 더 제한적으로 정제한다.
+  // 텍스트 서식과 빈 줄은 살리되 실행 가능한 태그/속성은 허용하지 않는다.
+  function safeOriginalReviewHtml(html) {
+    if (typeof html !== 'string' || !html.trim()) return '';
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const keepTags = new Set(['DIV','SECTION','ARTICLE','P','BR','SPAN','FONT','STRONG','B','EM','I','U','S','SUB','SUP',
+      'H1','H2','H3','H4','H5','H6','BLOCKQUOTE','UL','OL','LI','FIGURE','IMG','HR','TABLE','TBODY','THEAD','TR','TD','TH']);
+    const denyTags = new Set(['SCRIPT','STYLE','NOSCRIPT','IFRAME','OBJECT','EMBED','SVG','BUTTON','FORM','INPUT','TEXTAREA',
+      'SELECT','VIDEO','AUDIO','CANVAS','HEADER','FOOTER','NAV','ASIDE']);
+    const keepCss = new Set(['font-size','font-family','font-weight','font-style','line-height','letter-spacing',
+      'text-align','text-decoration','color','white-space','margin-top','margin-bottom',
+      'padding-top','padding-bottom','padding-left','padding-right','width','display']);
+    const cleanNode = node => {
+      if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.nodeValue || '');
+      if (node.nodeType !== Node.ELEMENT_NODE) return document.createDocumentFragment();
+      const tag = node.tagName;
+      if (denyTags.has(tag)) return document.createDocumentFragment();
+      const out = keepTags.has(tag) ? document.createElement(tag.toLowerCase()) : document.createElement('span');
+      if (tag === 'IMG') {
+        const url = node.getAttribute('src') || '';
+        if (!/^https?:\/\//i.test(url) || /escrow|에스크로|kbes|favicon|avatar|placeholder|\/logo[\/_\.]/i.test(url)) {
+          return document.createDocumentFragment();
+        }
+        out.setAttribute('src', url);
+        out.setAttribute('alt', String(node.getAttribute('alt') || '').slice(0, 180));
+        out.setAttribute('loading', 'lazy');
+        out.setAttribute('decoding', 'async');
+        out.setAttribute('referrerpolicy', 'no-referrer');
+      }
+      if (tag === 'DIV' && node.classList.contains('review-original-content')) out.className = 'review-original-content';
+      const style = document.createElement('span').style;
+      style.cssText = node.getAttribute('style') || '';
+      const allowedStyle = [];
+      for (const property of [...style]) {
+        const value = style.getPropertyValue(property);
+        if (!keepCss.has(property) || !value || /url\s*\(|expression\s*\(|javascript:|var\s*\(/i.test(value)) continue;
+        if (value.length > 200) continue;
+        allowedStyle.push(`${property}:${value}`);
+      }
+      if (allowedStyle.length) out.setAttribute('style', allowedStyle.join(';'));
+      if (tag !== 'IMG') for (const child of node.childNodes) out.appendChild(cleanNode(child));
+      return out;
+    };
+    const host = document.createElement('div');
+    for (const child of [...template.content.childNodes]) host.appendChild(cleanNode(child));
+    return host.innerHTML;
+  }
+
+  // 원본 후기 첫 사진 위에 남아 있는 빈 줄/빈 래퍼와 상단 마진만 제거한다.
+  // 후기에 포함된 다른 문단과 사진 사이 간격은 건드리지 않는다.
+  function normalizeReviewArticleStart(html) {
+    if (!html || !html.trim()) return html;
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const isBlank = node => {
+      if (node.nodeType === Node.TEXT_NODE) return !(node.textContent || '').replace(/[\u00a0\u200b\ufeff]/g, ' ').trim();
+      if (node.nodeType !== Node.ELEMENT_NODE) return true;
+      if (node.matches('img, hr, iframe, video, svg') || node.querySelector('img, hr, iframe, video, svg')) return false;
+      return !(node.textContent || '').replace(/[\u00a0\u200b\ufeff]/g, ' ').trim();
+    };
+    const trimBeginning = (parent, depth = 0) => {
+      if (depth > 15) return;
+      while (parent.firstChild && isBlank(parent.firstChild)) parent.firstChild.remove();
+      const first = parent.firstChild;
+      if (first?.nodeType === Node.ELEMENT_NODE && /^(DIV|SECTION|ARTICLE|P|SPAN|FIGURE|TABLE|TBODY|TR|TD)$/i.test(first.tagName)) {
+        trimBeginning(first, depth + 1);
+      }
+    };
+    trimBeginning(host);
+    // 가장 먼저 보이는 콘텐츠가 이미지일 때만 해당 이미지와 그 위쪽 래퍼의 마진을 해제.
+    const walker = document.createTreeWalker(host, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    let node, leadingImage = null;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === Node.TEXT_NODE && (node.textContent || '').replace(/[\u00a0\u200b\ufeff]/g, ' ').trim()) break;
+      if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG') { leadingImage = node; break; }
+    }
+    if (leadingImage) {
+      for (let el = leadingImage; el && el !== host; el = el.parentElement) {
+        el.classList.add('review-leading-media');
+      }
+    }
+    return host.innerHTML;
+  }
+
+  function openReview(review) {
+    const dialog = ensureReviewDialog();
+    reviewDialogView = 'detail';
+    dialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
+    const details = detailLines(review);
+    const blocks = Array.isArray(review.contentBlocks) ? review.contentBlocks : [];
+    const validBlocks = blocks.filter(block => block && (block.type === 'text' && typeof block.text === 'string' || block.type === 'image' && typeof block.url === 'string' && /^https?:\/\//i.test(block.url)));
+    // 이전 수집 데이터나 혼합형 게시물은 images에만 있는 추가 사진도 빠짐없이 표시.
+    const blockImageUrls = new Set(validBlocks.filter(block => block.type === 'image').map(block => block.url));
+    const extraImages = validReviewImages(review).filter(url => !blockImageUrls.has(url));
+    const body = String(review.body || '').trim();
+    const images = validReviewImages(review);
+    let articleHtml = safeOriginalReviewHtml(review.articleHtml);
+    if (!articleHtml) {
+      // 자동 갱신 전 JSON의 구형 블록은 임시로 보여주되, 인증 배지는 표시하지 않는다.
+      const seen = new Set();
+      const isUnwanted = url => /escrow|에스크로|kbes|favicon|avatar|placeholder|\/logo[\/_\.]/i.test(url || '');
+      const identity = url => {
+        try { const u = new URL(url); return `${u.hostname}/${u.pathname.split('/').filter(Boolean).slice(-2).join('/')}`.toLowerCase(); }
+        catch { return String(url || '').toLowerCase(); }
+      };
+      const addPhoto = url => {
+        if (!url || !/^https?:\/\//i.test(url) || isUnwanted(url) || seen.has(identity(url))) return '';
+        seen.add(identity(url));
+        return `<figure class="review-blog-photo"><img src="${escapeHtml(url)}" alt="출고 후기 사진" loading="lazy" referrerpolicy="no-referrer"></figure>`;
+      };
+      if (validBlocks.length) {
+        articleHtml = validBlocks.map(block => block.type === 'image' ? addPhoto(block.url) :
+          `<p>${escapeHtml(block.text).replace(/\n/g, '<br>')}</p>`).join('');
+        // 사진이 하나라도 있으면 목록 썸네일을 마지막에 다시 붙이지 않는다.
+        if (!seen.size) articleHtml = addPhoto(review.image) + articleHtml;
+      } else {
+        const paragraphs = body ? body.split(/\n{2,}/).map(line => line.trim()).filter(Boolean) : [];
+        const mainText = paragraphs.length ? paragraphs.map(line => `<p>${escapeHtml(line).replace(/\n/g, '<br>')}</p>`).join('') :
+          `<p>출고 차량과 상담 내용을 소개합니다.</p>${details.map(line => `<p>${escapeHtml(line)}</p>`).join('')}`;
+        articleHtml = addPhoto(images[0]) + mainText + images.slice(1).map(addPhoto).join('');
+      }
+    }
+
+    articleHtml = normalizeReviewArticleStart(articleHtml);
+
+    dialog.innerHTML = `<div class="review-detail-panel review-detail-panel--blog">
+      <header class="review-detail-head"><div>${reviewDetailFromList ? '<button type="button" class="review-back-list" data-review-back-list>← 전체 후기 목록</button>' : ''}<span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
+      <h2>${escapeHtml(cleanReviewTitle(review.title))}</h2><time>${escapeHtml(formatReviewDate(review.date))}</time></div>
+      <button type="button" class="review-detail-close" data-review-close aria-label="후기 닫기">×</button></header>
+      <div class="review-detail-scroll review-blog-scroll"><article class="review-blog-article">${articleHtml}</article></div>
+    </div>`;
+    showReviewDialog(dialog);
+    dialog.querySelector('.review-detail-scroll')?.scrollTo(0, 0);
+  }
+
+  track.addEventListener('click', event => {
+    const link = event.target.closest('[data-review-open]');
+    if (!link || carousel.classList.contains('is-dragging')) return;
+    event.preventDefault();
+    const review = allReviews.find(item => String(item.id) === link.dataset.reviewOpen);
+    if (review) {
+      reviewDetailFromList = false;
+      openReview(review);
+    }
+  });
+  document.querySelector('.review-section__more')?.addEventListener('click', event => {
+    event.preventDefault();
+    showAllReviews();
+  });
 
   function destroyReviewSwiper() {
     if (!reviewSwiper) return;
@@ -434,7 +796,8 @@
   }
 
   function renderReviewList(items) {
-    const reviews = prepareReviews(items);
+    allReviews = prepareReviews(items);
+    const reviews = rollingReviews(allReviews);
     renderedReviews = reviews;
 
 
@@ -445,7 +808,7 @@
     }
 
     section.hidden = false;
-    track.innerHTML = reviews.map(cardTemplate).join('');
+    track.innerHTML = reviews.length ? reviews.map(cardTemplate).join('') : `<article class="review-card review-card--loading"><div class="review-card__body"><strong>최근 3개월 동안 등록된 출고 후기가 없습니다.</strong><p>전체 후기 보기에서 이전 출고 사례를 확인해 보세요.</p></div></article>`;
     bindImageFallbacks();
 
     // DOM 크기가 계산된 다음 Swiper를 초기화해야 slidesPerView:auto가 정확하게 작동한다.
@@ -651,6 +1014,7 @@
       renderReviewList(reviews);
     } else {
       section.hidden = false;
+      allReviews = [];
       destroyReviewSwiper();
       track.innerHTML = `<article class="review-card review-card--loading">
         <div class="review-card__body">
