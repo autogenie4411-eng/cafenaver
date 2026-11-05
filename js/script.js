@@ -3,6 +3,49 @@
 
   const currentMonth = new Date().getMonth() + 1;
 
+  // 현재 월은 화면 렌더링 시마다 계산합니다.
+  // 탭을 오래 열어둔 상태에서 월이 바뀌어도 월별 할인 표시를 갱신합니다.
+  function getCurrentDiscountMonth() {
+    return new Date().getMonth() + 1;
+  }
+
+  function syncDisplayedDiscountMonths() {
+    const label = `${getCurrentDiscountMonth()}월 할인율`;
+
+    document.querySelectorAll(".monthly-discount-sticker").forEach((sticker) => {
+      const monthElement = sticker.querySelector(".monthly-discount-sticker__month");
+      if (monthElement) {
+        monthElement.textContent = label;
+      }
+
+      const rate = sticker.querySelector(".monthly-discount-sticker__rate")?.textContent?.trim();
+      if (rate) {
+        sticker.setAttribute("aria-label", `${label} 최대 ${rate}`);
+      }
+    });
+
+    document.querySelectorAll(".discount-rate dt").forEach((element) => {
+      element.textContent = label;
+    });
+  }
+
+  // 휴면 탭 복귀/브라우저 뒤로가기로 돌아오는 경우에도 최신 월을 표시합니다.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      syncDisplayedDiscountMonths();
+    }
+  });
+  window.addEventListener("pageshow", syncDisplayedDiscountMonths);
+
+  // 페이지를 계속 열어둔 경우에는 매분 확인합니다.
+  window.setInterval(() => {
+    if (!document.hidden) {
+      syncDisplayedDiscountMonths();
+    }
+  }, 60 * 1000);
+
+
+
   function resetPageScroll() {
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
@@ -33,15 +76,32 @@
       return relativePath;
     }
   }
+  // URL 전용 진입은 로더 뒤에서 원하는 위치를 미리 완성합니다.
+  let deepLinkedVehicleReady = false;
   const landingLoader = document.getElementById("landingLoader");
   if (landingLoader) {
     document.body.classList.add("loader-active");
 
     window.setTimeout(() => {
-      landingLoader.setAttribute("aria-hidden", "true");
+      if (deepLinkedVehicleReady) {
+        // 로딩 커버가 아직 보이는 동안 스크롤 잠금을 풀고 즉시 위치를 맞춥니다.
+        // 커버가 사라진 다음 스크롤하는 방식은 눈에 보이는 화면 이동을 유발합니다.
+        document.body.classList.remove("loader-active");
+        // 로더를 완전히 덮어둔 상태에서 실제 스크롤 좌표부터 맞춥니다.
+        scrollDeepLinkedVehicleToCard();
+        window.requestAnimationFrame(() => {
+          // 스크롤 잠금 해제 후 브라우저 레이아웃 변경까지 반영합니다.
+          scrollDeepLinkedVehicleToCard();
+          window.requestAnimationFrame(() => {
+            scrollDeepLinkedVehicleToCard();
+            // 위치 조정이 끝난 다음에만 로더를 제거합니다.
+            landingLoader.remove();
+          });
+        });
+      } else {
+        landingLoader.setAttribute("aria-hidden", "true");
+      }
 
-      // 로더가 사라진 뒤에는 현재 스크롤 위치를 건드리지 않습니다.
-      // 사용자가 빠르게 차량 구분을 선택한 경우에도 맨 위로 튀지 않습니다.
       window.setTimeout(() => {
         document.body.classList.remove("loader-active");
         landingLoader.remove();
@@ -2167,7 +2227,7 @@ const vehicleCatalog = [
             "id": "paint-346",
             "name": "우유니 화이트",
             "hex": "#F3F3F3",
-            "border": "#030303",
+            "border": "#cfd5dc",
             "image": "images/vehicles/제네시스/g90-우유니 화이트.webp"
           },
           {
@@ -10620,9 +10680,7 @@ const vehicleCatalog = [
     cars: brand.cars.map(car => car.name)
   }));
 
-  const MARKETS_FOR_REVIEWS =  ["domestic"];
-
-  // 출고 후기 → STEP 01 차량 목록 연결. 현재 등록된 차량만 연결하고,
+  // 출고 후기 → STEP 01 실제 차량 선택 연결. 현재 등록된 차량만 연결하고,
   // 후기의 모델명/제목을 함께 확인해 일반/하이브리드/전기 모델 혼선을 방지합니다.
   // 후기의 차종명에 자주 쓰이는 다른 표기/오타를 공식 차량명으로 통일합니다.
   // 일반 모델과 하이브리드/EV의 구분은 아래 차량 매칭 단계에서 계속 검사합니다.
@@ -10720,32 +10778,12 @@ const vehicleCatalog = [
     const wantsElectric = /(?:\bEV\b|일렉트릭|일렉트리파이드|전동화|전기차|EVX)/i.test(`${review.model || ""} ${review.title || ""}`);
     let best = null;
 
-    const brandAliases = {
-      "메르세데스벤츠": "벤츠", "mercedesbenz": "벤츠",
-      "kg모빌리티": "KGM", "쌍용": "KGM", "쌍용자동차": "KGM"
-    };
-    const explicitBrand = reviewVehicleNormalize(review.brand);
-    const normalizedBrand = reviewVehicleNormalize(brandAliases[explicitBrand] || review.brand);
-    const maybachReview = /maybach|마이바흐/i.test(`${review.model || ""} ${review.title || ""}`);
-    const importAliases = {
-      "벤츠": {
-        "E클래스 아방가르드": ["E200", "E300", "E250", "E220", "E클래스"],
-        "E클래스 익스클루시브": ["E200 익스클루시브", "E300 익스클루시브", "E클래스 익스클루시브"],
-        "S클래스": ["S450", "S500", "S580"],
-        "마이바흐 GLS": ["MAYBACH GLS", "GLS 600", "GLS600"]
-      }
-    };
-
-    for (const brand of vehicleCatalog.filter(item => MARKETS_FOR_REVIEWS.includes(item.market))) {
-      if (normalizedBrand && normalizedBrand !== reviewVehicleNormalize(brand.name)) continue;
+    for (const brand of vehicleCatalog.filter(item => item.market === DEFAULT_MARKET)) {
       for (const car of brand.cars) {
         const name = car.name;
-        // 마이바흐는 일반 GLS와 구분해 연결합니다.
-        if (brand.name === "벤츠" && maybachReview && !name.startsWith("마이바흐")) continue;
-
         const hybrid = /하이브리드/.test(name);
         const electric = /(?:\sEV$|\sEVX$|일렉트릭|일렉트리파이드)/i.test(name);
-        if (brand.market === "domestic" && (hybrid !== wantsHybrid || electric !== wantsElectric)) continue;
+        if (hybrid !== wantsHybrid || electric !== wantsElectric) continue;
 
         const exact = reviewVehicleNormalize(name);
         const base = reviewVehicleNormalize(name
@@ -10755,11 +10793,9 @@ const vehicleCatalog = [
         const extraAliases = {
           "포터2": ["포터"],
           "렉스턴 뉴 아레나": ["렉스턴"],
-          "트랙스 크로스오버": ["트랙스"],
-          "팰리세이드": ["펠리세이드"]
+          "트랙스 크로스오버": ["트랙스"]
         };
-        const aliases = [exact, base, ...(extraAliases[name] || []).map(reviewVehicleNormalize),
-          ...((importAliases[brand.name] || {})[name] || []).map(reviewVehicleNormalize)]
+        const aliases = [exact, base, ...(extraAliases[name] || []).map(reviewVehicleNormalize)]
           .filter(word => word.length >= 2);
         let score = 0;
         for (const word of aliases) {
@@ -10774,30 +10810,31 @@ const vehicleCatalog = [
           registeredBrand.includes(explicitBrand) ||
           (brand.name === "KGM" && ["kg모빌리티", "쌍용", "쌍용자동차"].some(alias => explicitBrand.includes(alias)));
         if (!isSameBrand) continue;
-        if (!best || score > best.score) best = { brandName: brand.name, carName: name, market: brand.market, score };
+        if (!best || score > best.score) best = { brandName: brand.name, carName: name, score };
       }
     }
-    return best ? { brandName: best.brandName, carName: best.carName, market: best.market } :
+    return best ? { brandName: best.brandName, carName: best.carName } :
       findVehicleByReviewTypo(review, modelText, titleText, wantsHybrid, wantsElectric);
   }
 
   function openReviewVehicleList(vehicle) {
     if (!vehicle || typeof vehicle !== "object") return;
-    const brand = vehicleCatalog.find(item => item.name === vehicle.brandName && item.market === vehicle.market);
+    const brand = vehicleCatalog.find(item => item.name === vehicle.brandName && item.market === DEFAULT_MARKET);
     if (!brand || !brand.cars.some(car => car.name === vehicle.carName)) return;
 
-    // 후기에서 연결된 차종의 외장 색상 단계로 바로 이동합니다.
+    // 후기 버튼을 누르면 목록에서 다시 클릭하지 않아도 해당 차량의
+    // 이미지 및 외장 색상 선택 단계가 바로 열리도록 합니다.
     state.step = 1;
-    state.market = brand.market;
+    state.market = DEFAULT_MARKET;
     state.brandName = brand.name;
     state.carName = vehicle.carName;
-    state.paintId = ""; // 외장 색상은 사용자가 직접 선택합니다.
+    state.paintId = ""; // 후기의 외장 색상을 임의로 선택하지 않습니다.
     resetSelectionsAfterVehicleChange();
     rememberWizardStep();
     render();
 
-    // 기존 차량 카드 클릭과 동일한 상세 영역 위치에 맞춰 이동합니다.
-    // 후기가 가진 색상 정보로 임의 선택하지 않고 선택 버튼을 노출합니다.
+    // 일반 차량 카드 클릭 시와 같은 위치로 이동해 차량 이미지와
+    // 외장 색상 버튼을 함께 보여 줍니다(하단 고정 버튼은 기존 그대로).
     scrollToNextSelection(".wizard-car-card", "start", 76);
   }
 
@@ -10888,9 +10925,6 @@ const vehicleCatalog = [
   // Google Apps Script를 웹앱으로 배포한 뒤 아래 주소만 교체하세요.
   // 예: https://script.google.com/macros/s/AKfycb.../exec
   const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbN9KUT6PaeO9vvmGYcmLNAM7a6zu5_lDse_P_iilkBzKGOSauNSPcwBGMvgUYUaMP/exec";
-  // 운영 사이트에서 올바른 JS가 로드됐는지 개발자 도구 Console로 확인합니다.
-  const NAVER_CAFE_SCRIPT_VERSION = "NAVER_CAFE_FRONT_20260922_V2";
-  console.info("[네이버카페 견적] 프런트 버전:", NAVER_CAFE_SCRIPT_VERSION);
 
   /* =========================================================
     방문 유입 로그 + 실제 사이트 체류시간 측정
@@ -11119,7 +11153,8 @@ const vehicleCatalog = [
       visitorId: getAutojiniVisitorId(),
       visitSessionId: autojiniVisitSessionId,
       deviceType: getDeviceType(),
-      browserName: getBrowserName()
+      browserName: getBrowserName(),
+      ...window.AutoGenieTraffic?.getFields()
     });
 
     if (success) {
@@ -11361,6 +11396,273 @@ const vehicleCatalog = [
   const reviewSection = document.getElementById("reviewSection");
   const reviewParking = document.getElementById("reviewParking");
 
+  // [트림 상세 팝업 사용 여부]
+  // false: 트림 버튼 클릭 시 설명 팝업 없이 즉시 선택 (기본 동작)
+  // true : 기존처럼 트림 설명 팝업을 열고 확인 버튼을 눌러 선택
+  // 할인율 배지와 차단 경고·견적 신청 기능에는 영향을 주지 않습니다.
+  const ENABLE_TRIM_DETAIL = false;
+
+  // STEP 02: 상세 팝업을 사용할 때만 확인 후 subTrim에 반영합니다.
+  const trimDetailModal = document.getElementById("trimDetailModal");
+  const confirmTrimSelectionButton = document.getElementById("confirmTrimSelection");
+  let pendingSubTrim = "";
+  // 모바일 전체 화면을 닫을 때 임시 히스토리가 이전의 트림 선택값을 덮어쓰지 않도록 관리합니다.
+  const TRIM_DETAIL_HISTORY_KEY = "autogenieTrimDetailScreen";
+  let trimDetailHistoryActive = false;
+  let trimDetailHistoryExitPending = false;
+
+  // 데스크탑 트림 팝업이 열린 동안에는 배경 페이지의 휠 스크롤을 막습니다.
+  // overflow 잠금만 사용하므로 현재 페이지 스크롤 위치가 그대로 유지됩니다.
+  function setTrimBackgroundScrollLock(locked) {
+    document.documentElement.classList.toggle("trim-detail-scroll-locked", locked);
+    document.body.classList.toggle("trim-detail-scroll-locked", locked);
+  }
+
+  // 트림별 설명(그랜저 포함)은 js/trim-reference-data.js에서 일괄 관리합니다.
+  // 팝업 공통 로직은 이 파일에서 처리합니다.
+  function openTrimDetailModal(trimName) {
+    if (!trimName || state.step !== 2 || !state.trim) return;
+    const modelGroup = currentVehicle()?.detailModels?.find(group => group.name === state.trim);
+    if (!modelGroup || !modelGroup.trims.includes(trimName)) return;
+
+    // 팝업 일시 중단: 현재 트림을 바로 확정하고 기존 선택 UI를 갱신합니다.
+    // 이 경로에서는 모달·모바일 히스토리·트림 설명 데이터를 사용하지 않습니다.
+    if (!ENABLE_TRIM_DETAIL) {
+      pendingSubTrim = trimName;
+      commitTrimSelection();
+      return;
+    }
+
+    const descriptionKey = [state.brandName, state.carName, state.trim, trimName].join("|");
+    // 차종 단위 공통 이미지 대신 반드시 차종 + 실제 선택한 트림을 기준으로 매핑합니다.
+    // 확인된 기본 사양이 아닐 때는 자료에 없는 업그레이드를 사실로 안내하지 않습니다.
+    const referenceKey = [state.brandName, state.carName, trimName].join("|");
+    const referenceGroupKey = [state.brandName, state.carName, state.trim, trimName].join("|");
+    const registeredDetail = window.AutoGenieTrimReference?.[descriptionKey]
+      || window.AutoGenieTrimReference?.[referenceGroupKey]
+      || window.AutoGenieTrimReference?.[referenceKey]
+      || null;
+    const compareTitle = document.getElementById("trimDetailCompareTitle");
+    const comparisonSection = document.getElementById("trimDetailComparison");
+    const inheritedList = document.getElementById("trimDetailInheritedList");
+    const addedList = document.getElementById("trimDetailAddedList");
+    const comparisonFoot = document.getElementById("trimDetailComparisonFoot");
+    const inheritedTitle = document.getElementById("trimDetailInheritedTitle");
+    const addedTitle = document.getElementById("trimDetailAddedTitle");
+    const upgrade = registeredDetail?.upgrade;
+    const hasComparison = Boolean(upgrade && Array.isArray(registeredDetail?.inheritedHighlights));
+    // 기아 5개 차종의 비교 목록은 검수 미완료 상태라도 숨기지 않습니다.
+    // verified:false 자체는 유지하여 기본 적용 확인 완료로 오인하지 않게 합니다.
+    const showPendingKiaUpgrade = state.brandName === "기아"
+      && ["셀토스 하이브리드", "스포티지 하이브리드", "쏘렌토 하이브리드", "카니발", "카니발 하이브리드"].includes(state.carName)
+      && Array.isArray(upgrade?.items)
+      && upgrade.items.length > 0;
+
+    if (comparisonSection && inheritedList && addedList && comparisonFoot && inheritedTitle && addedTitle) {
+      comparisonSection.hidden = !hasComparison;
+      if (!hasComparison) comparisonSection.classList.remove("trim-detail-modal__comparison--pending");
+      inheritedList.replaceChildren();
+      addedList.replaceChildren();
+
+      if (hasComparison) {
+        const isUnverified = upgrade.verified === false;
+        const inheritedGroup = inheritedList.closest(".trim-detail-modal__comparison-group");
+        const addedBadge = comparisonSection.querySelector(".trim-detail-modal__upgrade-badge");
+        if (inheritedGroup) inheritedGroup.hidden = !registeredDetail.inheritedHighlights.length;
+        // 검수 중인 5개 차종도 비교 목록이 있으면 UPGRADE 영역을 표시합니다.
+        if (addedBadge) addedBadge.hidden = isUnverified && !showPendingKiaUpgrade;
+        inheritedTitle.textContent = `${upgrade.previous}에서 이어지는 주요 사양`;
+        addedTitle.textContent = isUnverified && !showPendingKiaUpgrade
+          ? (upgrade.label || "사양 비교 확인 필요")
+          : trimName.includes("블랙 잉크")
+            ? "달라지는 디자인 포인트"
+            : "새로 추가된 기능";
+
+        registeredDetail.inheritedHighlights.forEach(label => {
+          const li = document.createElement("li");
+          const marker = document.createElement("span");
+          marker.className = "trim-detail-modal__check";
+          marker.setAttribute("aria-hidden", "true");
+          marker.textContent = "✓";
+          const txt = document.createElement("span");
+          txt.textContent = label;
+          li.append(marker, txt);
+          inheritedList.append(li);
+        });
+
+        upgrade.items.forEach(label => {
+          const li = document.createElement("li");
+          const marker = document.createElement("span");
+          marker.className = isUnverified
+            ? "trim-detail-modal__check"
+            : "trim-detail-modal__check trim-detail-modal__check--plus";
+          marker.setAttribute("aria-hidden", "true");
+          marker.textContent = isUnverified ? "✓" : "+";
+          const txt = document.createElement("span");
+          txt.textContent = label;
+          li.append(marker, txt);
+          addedList.append(li);
+        });
+        if (isUnverified && !upgrade.items.length) {
+          const li = document.createElement("li");
+          li.className = "trim-detail-modal__comparison-pending";
+          li.textContent = "제공된 자료에서 이 트림의 추가 기본 사양을 확인할 수 없습니다.";
+          addedList.append(li);
+        }
+        // 5개 기아 차종의 검수 중 비교자료는 안내 문구를 유지하되, 기존 파란색 UPGRADE 스타일을 사용합니다.
+        // (pending 클래스를 붙이면 CSS가 제목과 배경을 회색으로 덮어씁니다.)
+        comparisonSection.classList.toggle("trim-detail-modal__comparison--pending", isUnverified && !showPendingKiaUpgrade);
+        comparisonFoot.textContent = (upgrade.note || "이전 트림의 기본 사양을 포함합니다.")
+          + (isUnverified && showPendingKiaUpgrade
+            ? " ※ 위 추가·변경 사양은 현재 기본 적용 검수 중입니다. 제조사 가격표에서 트림별 기본품목·선택품목을 반드시 확인해 주세요."
+            : "");
+      }
+    }
+
+    if (compareTitle) compareTitle.textContent = hasComparison
+      ? "주요 사양"
+      : registeredDetail?.featureStatus === "optional" ? "선택 가능한 기능"
+      : registeredDetail?.referenceOnly ? "트림 적용 확인이 필요한 참고 기능"
+      : registeredDetail ? "주요 기본 사양" : "트림별로 달라질 수 있는 부분";
+    const defaultHighlights = [
+      "기본 포함 사양: 안전·편의 기능 등의 구성",
+      "선택 가능 옵션: 추가할 수 있는 옵션과 패키지",
+      "차량 가격: 트림 및 선택 옵션에 따른 견적 차이"
+    ];
+
+    // 텍스트 노드로 넣어 트림명에 특수문자가 있어도 HTML로 해석되지 않게 합니다.
+    document.getElementById("trimDetailVehicle").textContent =
+      `${state.brandName} ${state.carName} · ${state.trim}`;
+    document.getElementById("trimDetailModalTitle").textContent = trimName;
+
+    // 차량 외관 대표 이미지는 사용하지 않고, 검증된 트림별 '핵심 기능' 이미지만 표시합니다.
+    // 미등록 트림은 이미지 블록 자체를 숨겨 잘못된 옵션을 안내하지 않도록 합니다.
+    // 등록 예시: window.AutoGenieTrimReference["브랜드|차량|세부모델|트림"].featureImage
+    const trimVisual = document.getElementById("trimDetailVisual");
+    const trimImage = document.getElementById("trimDetailImage");
+    const trimFeatureName = document.getElementById("trimDetailFeatureName");
+    const trimImageCaption = document.getElementById("trimDetailImageCaption");
+    const featureLabel = document.getElementById("trimDetailFeatureLabel");
+    if (featureLabel) featureLabel.textContent =
+      registeredDetail?.featureStatus === "added" ? "이번 트림부터 기본 적용되는 기능"
+      : registeredDetail?.featureStatus === "standard" ? "트림 기본 적용 기능"
+      : registeredDetail?.featureStatus === "optional" ? "이 트림에서 선택 가능한 기능"
+      : registeredDetail?.referenceOnly ? "차종 참고 기능" : "대표 핵심 기능";
+    if (trimVisual && trimImage && trimFeatureName && trimImageCaption) {
+      trimVisual.hidden = true;
+      trimImage.onerror = null;
+      trimImage.removeAttribute("src");
+      trimImage.alt = "";
+      const featureImage = registeredDetail?.featureImage;
+      if (featureImage && registeredDetail.featureTitle) {
+        trimFeatureName.textContent = registeredDetail.featureTitle;
+        trimImage.alt = registeredDetail.featureAlt || `${state.carName}의 ${registeredDetail.featureTitle} 기능 참고 이미지`;
+        trimImageCaption.textContent = registeredDetail.featureCaption || "기능 설명을 위한 이미지입니다. 실제 적용 사양은 연식과 옵션에 따라 달라질 수 있습니다.";
+        trimImage.classList.toggle("trim-detail-modal__image--contain", registeredDetail.featureImageDisplay === "contain");
+        trimImage.onerror = () => { trimVisual.hidden = true; };
+        trimImage.src = assetUrl(featureImage);
+        trimVisual.hidden = false;
+      } else {
+        trimFeatureName.textContent = "";
+        trimImageCaption.textContent = "";
+      }
+    }
+
+    document.getElementById("trimDetailModalSummary").textContent = registeredDetail?.summary ||
+      `‘${trimName}’ 트림은 선택한 차량의 세부 등급이에요. 같은 차량이라도 트림에 따라 기본 제공되는 사양과 선택 가능한 옵션이 달라질 수 있어요.`;
+
+    const noticeText = document.querySelector(".trim-detail-modal__notice p");
+    if (noticeText) noticeText.textContent = registeredDetail?.featureStatus === "optional"
+      ? "이 기능은 제공된 대표 차량 구성에서 선택 가능한 옵션으로 확인됐습니다. 실제 주문 가능 여부와 가격은 연식·엔진·패키지에 따라 달라질 수 있습니다."
+      : registeredDetail?.referenceOnly
+        ? "이 이미지는 해당 차종의 참고 기능이며, 현재 선택한 트림에서 새로 추가되거나 기본 제공된다는 뜻은 아닙니다. 정확한 적용 여부는 연식·세부모델별 사양표를 확인해 주세요."
+        : "기본 사양과 선택 옵션은 차량, 연식, 세부모델에 따라 달라질 수 있습니다. 정확한 구성은 상담 시 확인해 주세요.";
+    const highlightList = document.getElementById("trimDetailHighlights");
+    highlightList.replaceChildren();
+    highlightList.hidden = hasComparison;
+    const highlights = Array.isArray(registeredDetail?.highlights) && registeredDetail.highlights.length
+      ? registeredDetail.highlights
+      : defaultHighlights;
+    if (!hasComparison) {
+      highlights.forEach(item => {
+        const li = document.createElement("li");
+        const marker = document.createElement("span");
+        marker.className = "trim-detail-modal__check";
+        marker.setAttribute("aria-hidden", "true");
+        marker.textContent = "✓";
+        const text = document.createElement("span");
+        text.textContent = item;
+        li.append(marker, text);
+        highlightList.append(li);
+      });
+    }
+
+    pendingSubTrim = trimName;
+    if (trimDetailModal?.showModal) {
+      // 히스토리와 선택값이 뒤섞이지 않도록 모바일에서만 별도 화면 이력을 생성합니다.
+      if (window.matchMedia("(max-width: 768px)").matches) {
+        rememberWizardStep();
+        window.history.pushState(
+          { ...(window.history.state || {}), [TRIM_DETAIL_HISTORY_KEY]: true }, "", window.location.href
+        );
+        trimDetailHistoryActive = true;
+      }
+      trimDetailModal.showModal();
+      setTrimBackgroundScrollLock(true);
+      // 최초 진입 시 닫기 버튼에 포커스 테두리가 생기지 않도록 제목으로 포커스를 이동합니다.
+      document.getElementById("trimDetailModalTitle")?.focus({ preventScroll: true });
+      // 이전 트림의 스크롤 위치가 남지 않도록 상세 내용을 처음부터 보여줍니다.
+      trimDetailModal.querySelector(".trim-detail-modal__body")?.scrollTo(0, 0);
+    } else {
+      // dialog 미지원 브라우저에서도 확인 전 자동 선택은 하지 않습니다.
+      if (window.confirm(`${state.brandName} ${state.carName} - ${state.trim} / ${trimName}\n이 트림을 선택하시겠습니까?`)) {
+        commitTrimSelection();
+      } else {
+        pendingSubTrim = "";
+      }
+    }
+  }
+
+  function commitTrimSelection() {
+    const selected = pendingSubTrim;
+    if (!selected || state.step !== 2 || !state.trim) return;
+    // 선택한 트림이 현재 차량/세부모델에 실제 존재하는지 다시 확인합니다.
+    const group = currentVehicle()?.detailModels?.find(item => item.name === state.trim);
+    if (!group?.trims.includes(selected)) return;
+
+    // 중요: 팝업을 닫기 전에 STEP 02의 실제 선택값을 먼저 확정합니다.
+    // 이후 렌더·뒤로가기 이벤트에서 선택 전 상태로 복원되지 않도록 합니다.
+    state.subTrim = selected;
+    pendingSubTrim = "";
+    render();
+    showValidation("");
+    rememberWizardStep();
+    if (trimDetailModal?.open) trimDetailModal.close();
+    // 선택 확정 직후의 목록 스크롤이 정상 작동하도록 먼저 잠금을 해제합니다.
+    setTrimBackgroundScrollLock(false);
+
+    // 해당 트림의 선택 표시(라디오·active)가 보이도록 목록으로 돌아갑니다.
+    scrollToNextSelection('[data-option-section="sub-trim"]', "start");
+  }
+
+  confirmTrimSelectionButton?.addEventListener("click", commitTrimSelection);
+  trimDetailModal?.querySelectorAll("[data-trim-close]").forEach(button => {
+    button.addEventListener("click", () => trimDetailModal.close());
+  });
+  trimDetailModal?.addEventListener("click", event => {
+    // 팝업 바깥의 어두운 배경을 클릭하면 취소합니다.
+    if (event.target === trimDetailModal) trimDetailModal.close();
+  });
+  trimDetailModal?.addEventListener("close", () => {
+    setTrimBackgroundScrollLock(false);
+    // 취소는 기존 선택 유지, 확정은 이미 commitTrimSelection에서 선택 반영.
+    pendingSubTrim = "";
+    if (trimDetailHistoryActive && !trimDetailHistoryExitPending) {
+      trimDetailHistoryExitPending = true;
+      window.history.back();
+    }
+  });
+
   function updateReviewPlacement() {
     if (!reviewSection || !reviewParking) return;
 
@@ -11392,6 +11694,7 @@ const vehicleCatalog = [
     state.customerPhone = "";
     state.contactMethod = "";
     state.submitted = false;
+    state.blockedSubmission = false;
 
     // 다시 1단계부터 완료해야 다음 단계 탭을 열 수 있도록 합니다.
     state.maxReachedStep = 1;
@@ -11584,6 +11887,9 @@ const vehicleCatalog = [
     const paint = currentPaint();
     const paints = currentPaints();
     const useOwnBackground = Boolean(brand?.ownBackground && state.carName);
+    // 현재 월 기준 외장 색상 할인 안내 (최대 10%)
+    const discountMonth = getCurrentDiscountMonth();
+    const discountRate = 10;
 
     const carTitleMarkup = `<div class="wizard-car-title ${useOwnBackground ? "wizard-car-title--overlay" : ""}">
         <div>
@@ -11658,7 +11964,7 @@ const vehicleCatalog = [
         <div class="wizard-car-card car-adjust ${!state.carName ? "is-empty sequential-hidden" : ""} ${brand?.ownBackground ? "has-own-background" : ""} ${state.brandName === "테슬라" ? "is-tesla" : ""} ${state.brandName === "제네시스" ? "is-genesis" : ""} ${state.brandName === "기아" ? "is-kia" : ""} ${state.brandName === "기아" && state.carName === "봉고3" ? "is-kia-bongo3" : ""}" data-brand="${state.brandName || ""}" data-car="${state.carName || ""}">
           ${carImageMarkup}
 
-          <div class="paint-block ${!state.carName ? "is-disabled-block" : ""}" data-option-section="paint">
+          <div class="paint-block ${!state.carName ? "is-disabled-block" : "has-monthly-discount"}" data-option-section="paint">
             <div class="paint-label">
               <span class="paint-label-title"><b>3</b> 외장 색상${state.carName ? `<em>${paints.length}개</em>` : ""}</span>
               ${state.carName ? `<small class="paint-swipe-guide">좌우로 넘겨보세요</small>` : ""}
@@ -11674,6 +11980,16 @@ const vehicleCatalog = [
               </div>
               <div class="chosen-paint">
                 <strong>${paint ? paint.name : "색상을 선택해 주세요"}</strong>
+              </div>
+              <div class="monthly-discount-sticker" role="note" aria-label="${discountMonth}월 할인율 최대 ${discountRate}%">
+                <img class="monthly-discount-sticker__megaphone" src="images/discount-megaphone.png?v=20261028-match-ref-02" alt="" aria-hidden="true" width="52" height="64">
+                <div class="monthly-discount-sticker__pill">
+                  <span class="monthly-discount-sticker__month">${discountMonth}월 할인율</span>
+                  <div class="monthly-discount-sticker__details">
+                    <span class="monthly-discount-sticker__max">최대</span>
+                    <strong class="monthly-discount-sticker__rate">${discountRate}%</strong>
+                  </div>
+                </div>
               </div>
             ` : `<p class="empty-selection-guide">차량을 먼저 선택해 주세요.</p>`}
           </div>
@@ -11715,7 +12031,7 @@ const vehicleCatalog = [
                   ${isActive ? `
                     <div class="sub-trim-list" data-option-section="sub-trim">
                       ${group.trims.map(item => `
-                        <button class="sub-trim-item ${item === state.subTrim ? "active" : ""}" type="button" data-sub-trim="${item}">
+                        <button class="sub-trim-item ${item === state.subTrim ? "active" : ""}" type="button" data-sub-trim="${item}" ${ENABLE_TRIM_DETAIL ? 'aria-haspopup="dialog" aria-controls="trimDetailModal"' : ''} aria-pressed="${item === state.subTrim}">
                           <span class="radio-ui ${item === state.subTrim ? "checked" : ""}" aria-hidden="true"></span>
                           <strong>${item}</strong>
                         </button>
@@ -11805,6 +12121,17 @@ const vehicleCatalog = [
             <div><dt>이용조건</dt><dd>${state.usage || "상담 후 결정"} · ${state.initialCost || "상담 후 결정"}${!["초기비용 0원", "상담 후 결정"].includes(state.initialCost) && state.rate ? ` ${state.rate}` : ""}</dd></div>
             <div><dt>주행거리</dt><dd>${state.mileage || "상담 후 결정"}</dd></div>
             <div class="discount-rate"><dt>${currentMonth}월 할인율</dt><dd>최대 10%</dd></div>
+            <div class="delivery-event" role="group" aria-label="출고이벤트 혜택">
+              <dt class="delivery-event__ticket">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <rect x="3.5" y="9" width="17" height="12" rx="1.6"></rect>
+                  <path d="M2.5 9h19V6.5a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5V9Z"></path>
+                  <path d="M12 5v16M12 5C10 5 7.5 4.3 7.5 2.9a1.8 1.8 0 0 1 2-1.5C11.2 1.4 12 3.2 12 5ZM12 5c2 0 4.5-.7 4.5-2.1a1.8 1.8 0 0 0-2-1.5C12.8 1.4 12 3.2 12 5Z"></path>
+                </svg>
+                <span>출고이벤트</span>
+              </dt>
+              <dd class="delivery-event__benefits">블랙박스, 썬팅, 코일매트, 상품권 <strong>최대 100만원</strong> 증정</dd>
+            </div>
             ${isElectricVehicle() ? `<div><dt>보조금 지역</dt><dd data-summary-subsidy-region>${state.subsidyRegion || "선택 전"}</dd></div>` : ""}
           </dl>
         </div>
@@ -11861,6 +12188,22 @@ const vehicleCatalog = [
           <button type="button" class="privacy-open-button" id="privacyOpenButton" aria-haspopup="dialog" aria-controls="privacyModal">내용보기</button>
         </div>
         <p class="validation-message" id="validationMessage"></p>
+      </div>
+    `;
+  }
+
+  function renderBlockedComplete() {
+    return `
+      <div class="wizard-complete wizard-complete--blocked" role="status">
+        <div class="blocked-complete__icon" aria-hidden="true">!</div>
+        <h2>견적 신청이 제한되었습니다.</h2>
+        <p>현재 해당 접속 환경에서는 견적 신청을 진행하실 수 없습니다.</p>
+        <section class="blocked-complete__notice" aria-label="법적 조치 안내">
+          <strong>⚠ 법적 조치 안내</strong>
+          <p>반복적인 허위 견적 신청 및 서비스 이용 방해 행위가 지속될 경우<br class="blocked-complete__desktop-break"> 관련 법령에 따라 법적 조치가 취해질 수 있습니다.</p>
+        </section>
+        <p class="blocked-complete__support">정상적인 상담을 원하시는 경우 고객센터로 문의해 주세요.</p>
+        <button type="button" id="restartButton">홈으로 돌아가기</button>
       </div>
     `;
   }
@@ -11974,7 +12317,7 @@ const vehicleCatalog = [
       indicator.hidden = true;
       actions.hidden = true;
       spacer.hidden = true;
-      content.innerHTML = renderComplete();
+      content.innerHTML = state.blockedSubmission ? renderBlockedComplete() : renderComplete();
       updateReviewPlacement();
       bindCompleteEvents();
       return;
@@ -12406,12 +12749,7 @@ const vehicleCatalog = [
 
     content.querySelectorAll("[data-sub-trim]").forEach(button => {
       button.addEventListener("click", () => {
-        state.subTrim = button.dataset.subTrim;
-        render();
-
-        // 하위 트림을 선택해도 하단 버튼으로 이동하지 않고
-        // 2페이지의 "1. 세부모델" 위치에 고정합니다.
-        scrollToNextSelection('[data-option-section="engine-model"]', "start");
+        openTrimDetailModal(button.dataset.subTrim);
       });
     });
 
@@ -12620,6 +12958,7 @@ const vehicleCatalog = [
     state.customerPhone = "";
     state.contactMethod = "";
     state.submitted = false;
+    state.blockedSubmission = false;
     render();
 
     // 차량 선택을 초기화했으므로 첫 화면용 후기 영역도 다시 표시합니다.
@@ -12680,6 +13019,87 @@ const vehicleCatalog = [
     setFieldError(phone, document.getElementById("customerPhoneError"), "");
     showValidation("");
   }
+
+  // 기존 차단 이름/번호 규칙에 걸리는 경우에만 별도 경고문을 표시합니다.
+  function isBlockedEstimateIdentity(nameValue, phoneValue) {
+    const normalizedName = (nameValue || "").trim().toLowerCase().replace(/\s/g, "");
+    const blockedNames = [
+      "테스트", "홍길동", "아무개", "관리자", "운영자", "담당자",
+      "test", "tester", "admin", "administrator", "asdf", "qwer", "abc"
+    ];
+    const digits = (phoneValue || "").replace(/\D/g, "");
+    const subscriberNumber = digits.slice(digits.startsWith("02") ? 2 : 3);
+    const blockedNumbers = ["1234567", "7654321", "12341234", "12345678", "87654321"];
+    const middleNumber = subscriberNumber.slice(0, -4);
+    const lastNumber = subscriberNumber.slice(-4);
+    const isRepeatedGroup = number => number.length >= 3 && /^(\d)\1+$/.test(number);
+    return blockedNames.includes(normalizedName)
+      || blockedNumbers.includes(subscriberNumber)
+      || (isRepeatedGroup(middleNumber) && isRepeatedGroup(lastNumber));
+  }
+
+  const estimateBlockModal = document.getElementById("estimateBlockModal");
+  document.querySelectorAll("[data-estimate-block-close]").forEach(button => {
+    button.addEventListener("click", () => estimateBlockModal?.close());
+  });
+  // 차단 여부는 Google 시트의 방문자 ID 목록을 기준으로 확인합니다.
+  // 과거 테스트용 localStorage 플래그는 더 이상 접속 경고 판정에 사용하지 않습니다.
+  const ESTIMATE_BLOCK_BROWSER_KEY = "autogenie_estimate_blocked_browser_v1";
+  function rememberEstimateBlockedBrowser() {
+    // 구글 시트에 등록된 ID만 접속 경고 대상으로 삼습니다.
+  }
+  function showEstimateBlockedWarning() {
+    if (estimateBlockModal?.open) return;
+    if (estimateBlockModal?.showModal) estimateBlockModal.showModal();
+    else alert("견적 신청이 제한되었습니다. 동일한 허위 신청이 지속될 경우 법적 조치가 취해질 수 있습니다.");
+  }
+
+  // Apps Script 웹 앱은 외부 도메인 호출 시 CORS 제한이 있을 수 있어 JSONP를 사용합니다.
+  // 콜백은 구글 시트 내용이 아닌 {success, blocked}만 받습니다.
+  // 요청 전 실제 차단목록을 조회합니다. null은 네트워크/조회 오류를 뜻합니다.
+  // 공개 응답에서는 차단목록 전체가 아니라 차단 여부만 전달됩니다.
+  function requestIpBlockStatus(ipAddress) {
+    return new Promise(resolve => {
+      if (!GOOGLE_APPS_SCRIPT_URL || GOOGLE_APPS_SCRIPT_URL.includes("여기에_") ||
+          !ipAddress || ipAddress === "조회 실패") {
+        resolve(null);
+        return;
+      }
+      const callbackName = "agBlockCheck" + Math.random().toString(36).slice(2);
+      const script = document.createElement("script");
+      const url = new URL(GOOGLE_APPS_SCRIPT_URL);
+      url.searchParams.set("action", "check_visitor_block");
+      url.searchParams.set("ipAddress", ipAddress);
+      url.searchParams.set("callback", callbackName);
+      url.searchParams.set("_", String(Date.now()));
+      let settled = false;
+      let timeoutId;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        script.remove();
+        delete window[callbackName];
+        resolve(value);
+      };
+      window[callbackName] = result => {
+        finish(result && result.success === true && typeof result.blocked === "boolean"
+          ? result.blocked : null);
+      };
+      script.onerror = () => finish(null);
+      timeoutId = setTimeout(() => finish(null), 12000);
+      script.src = url.toString();
+      document.head.appendChild(script);
+    });
+  }
+
+  async function checkVisitorBlockOnEntry() {
+    const ipAddress = await getPublicIpAddress();
+    if (await requestIpBlockStatus(ipAddress) === true) {
+      showEstimateBlockedWarning();
+    }
+  }
+  checkVisitorBlockOnEntry();
 
   function isValidCustomerName(value) {
     const name = value.trim().replace(/\s+/g, " ");
@@ -12759,6 +13179,14 @@ const vehicleCatalog = [
   }
 
   window.addEventListener("popstate", event => {
+    // 모바일 트림 상세 화면만 닫는 뒤로가기는 견적 단계 뒤로가기로 취급하지 않습니다.
+    if (trimDetailHistoryActive) {
+      trimDetailHistoryActive = false;
+      trimDetailHistoryExitPending = false;
+      if (trimDetailModal?.open) trimDetailModal.close();
+      rememberWizardStep();
+      return;
+    }
     const saved = event.state?.[WIZARD_HISTORY_KEY];
     if (!saved || !Number.isInteger(saved.step) || saved.step < 1 || saved.step > 4) return;
     Object.assign(state, saved);
@@ -12844,6 +13272,12 @@ const vehicleCatalog = [
         return false;
       }
 
+      if (isBlockedEstimateIdentity(name.value, phone.value)) {
+        rememberEstimateBlockedBrowser();
+        showEstimateBlockedWarning();
+        return false;
+      }
+
       if (!isValidCustomerName(name.value)) {
         const message = "올바른 성함을 입력해 주세요.";
         setFieldError(name, nameError, message);
@@ -12898,7 +13332,6 @@ const vehicleCatalog = [
     }
 
     return {
-      submissionSource: "naver_cafe",
       submittedAt: new Date().toLocaleString("ko-KR"),
       vehicleType: state.market === "domestic" ? "국산차" : "수입차",
       brand: state.brandName || pendingText,
@@ -12931,12 +13364,28 @@ const vehicleCatalog = [
 
     const payload = buildEstimatePayload();
     const securityData = getAutojiniSecurityData();
+    const estimateIpAddress = await getPublicIpAddress();
 
     // Apps Script의 e.parameter에서 각 값을 안정적으로 읽을 수 있도록
     // application/x-www-form-urlencoded 형식으로 명시적으로 구성합니다.
+    // 신청출처는 광고 유입경로와 별도로 실제 견적 사이트 도메인에서 판별합니다.
+    // 네이버카페 전용 페이지는 기존처럼 window.AUTOGENIE_SUBMISSION_SOURCE = "naver_cafe"로 지정할 수 있습니다.
+    const currentHost = location.hostname.toLowerCase();
+    const sourceByDomain = {
+      "autogenie.agautoplan.com": { code: "", label: "오토지니" },
+      "kcar.agautoplan.com": { code: "google", label: "구글" },
+      "nkcar.agautoplan.com": { code: "naver_banner", label: "네이버배너" }
+    };
+    const explicitSource = String(window.AUTOGENIE_SUBMISSION_SOURCE || "").trim();
+    const explicitMap = {
+      naver_cafe: { code: "naver_cafe", label: "네이버카페" },
+      google: { code: "google", label: "구글" },
+      naver_banner: { code: "naver_banner", label: "네이버배너" }
+    };
+    const estimateSource = sourceByDomain[currentHost] || explicitMap[explicitSource] ||
+      { code: "", label: "오토지니" };
+
     const body = new URLSearchParams({
-      // 네이버카페 견적만 타회사 추가 메일 발송 대상으로 구분합니다.
-      submissionSource: payload.submissionSource,
       submittedAt: payload.submittedAt || "",
       vehicleType: payload.vehicleType || "",
       brand: payload.brand || "",
@@ -12953,13 +13402,19 @@ const vehicleCatalog = [
       customerPhone: payload.customerPhone || "",
       contactMethod: payload.contactMethod || "",
 
+      // 서버(Apps Script)에서 코드별로 출처와 이메일 제목을 구분합니다.
+      submissionSource: estimateSource.code,
+      applicationSource: estimateSource.label,
+      siteSource: estimateSource.label,
+      siteDomain: location.hostname,
+
       // 방문로그와 같은 방문자 ID를 사용해 고객이름을 연결합니다.
       visitorId: securityData.visitorId || "확인 불가",
-      elapsedSeconds: String(securityData.elapsedSeconds || 0)
+      ipAddress: estimateIpAddress,
+      visitSessionId: getOrCreateAutojiniVisitSessionId(),
+      elapsedSeconds: String(securityData.elapsedSeconds || 0),
+      ...window.AutoGenieTraffic?.getFields()
     });
-
-    // 개인 정보는 기록하지 않고 전송되는 출처 구분값만 확인합니다.
-    console.info("[네이버카페 견적] 전송 출처:", body.get("submissionSource"));
 
     await fetch(GOOGLE_APPS_SCRIPT_URL, {
       method: "POST",
@@ -13025,13 +13480,28 @@ const vehicleCatalog = [
     nextButton.textContent = "견적 전송 중...";
 
     try {
+      // no-cors POST는 서버 응답을 읽을 수 없으므로 보내기 전에 차단 여부를 별도로 확인합니다.
+      const applicationIp = await getPublicIpAddress();
+      const blockedStatus = await requestIpBlockStatus(applicationIp);
+      if (blockedStatus === null) {
+        throw new Error("차단 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+      }
+      if (blockedStatus === true) {
+        state.blockedSubmission = true;
+        state.submitted = true;
+        render();
+        scrollToEstimate();
+        return;
+      }
       await submitEstimateToGoogle();
+      window.AutoGenieTraffic?.trackConversion();
       state.submitted = true;
       render();
       scrollToEstimate();
     } catch (error) {
       console.error(error);
-      showValidation("견적 전송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      showValidation(error?.message?.includes("차단 상태")
+        ? error.message : "견적 전송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
       nextButton.disabled = false;
       nextButton.classList.remove("is-submitting");
       nextButton.innerHTML = originalText;
@@ -13043,9 +13513,60 @@ const vehicleCatalog = [
   const homeLogo = document.querySelector(".brand-mark");
   homeLogo?.addEventListener("click", event => {
     event.preventDefault();
-    resetWizardToStart();
+    // 로고 클릭은 스크롤 이동이 아닌 전체 견적 초기화입니다.
+    // 차량 딥링크(?car=...&brand=...)도 제거하고 처음 로딩 화면부터 재진입합니다.
+    // 기존 단계/선택/후기 상태는 새 페이지 로딩 시 초기값으로 복원됩니다.
+    window.location.replace(window.location.origin + window.location.pathname);
   });
 
+  // 차량별 광고·배너용 딥링크: ?car=코나 또는 ?brand=현대&car=코나
+  // 차량 선택 UI가 있는 STEP 01(외장 색상 영역)을 그대로 사용합니다.
+  function applyVehicleDeepLink() {
+    const params = new URL(window.location.href).searchParams;
+    const carName = (params.get("car") || "").trim();
+    const brandName = (params.get("brand") || "").trim();
+    if (!carName) return;
+
+    const matches = vehicleCatalog.filter(brand =>
+      (!brandName || brand.name === brandName) &&
+      brand.cars.some(car => car.name === carName) &&
+      currentBrands().some(available => available.name === brand.name)
+    );
+    if (matches.length !== 1) return;
+
+    state.market = DEFAULT_MARKET;
+    state.brandName = matches[0].name;
+    state.carName = carName;
+    state.paintId = ""; // 외장 색상은 방문자가 직접 선택
+    state.step = 1;
+    state.maxReachedStep = 1;
+  }
+
+
+  // 차량 리스트를 직접 클릭했을 때와 동일한 위치(카드 상단 76px)로 이동합니다.
+  // 로더가 보이는 동안 위치를 맞춰 사용자에게 스크롤 애니메이션이 보이지 않습니다.
+  function scrollDeepLinkedVehicleToCard() {
+    if (!state.carName || state.step !== 1) return;
+    const target = content.querySelector(".wizard-car-card");
+    if (!target) return;
+    const oldHtmlBehavior = document.documentElement.style.scrollBehavior;
+    const oldBodyBehavior = document.body.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = "auto";
+    document.body.style.scrollBehavior = "auto";
+    const destination = window.scrollY + target.getBoundingClientRect().top - 76;
+    window.scrollTo({ top: Math.max(0, destination), left: 0, behavior: "instant" });
+    document.documentElement.style.scrollBehavior = oldHtmlBehavior;
+    document.body.style.scrollBehavior = oldBodyBehavior;
+  }
+
+  const vehicleLinkSelected = Boolean(new URL(window.location.href).searchParams.get("car")) && (() => {
+    applyVehicleDeepLink();
+    return Boolean(state.carName && state.step === 1);
+  })();
   render();
   rememberWizardStep();
+  deepLinkedVehicleReady = vehicleLinkSelected;
+  if (vehicleLinkSelected && !landingLoader) {
+    window.requestAnimationFrame(scrollDeepLinkedVehicleToCard);
+  }
 })();

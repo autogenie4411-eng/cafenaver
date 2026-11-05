@@ -216,8 +216,8 @@
 
   const SWIPER_DELAY = 2200; // 한 카드가 머무는 시간(ms)
   const SWIPER_SPEED = 1000; // 옆으로 스르륵 넘어가는 시간(ms)
-  // 메인 슬라이더에는 최근 3개월만 사용하고, 전체보기에는 연도별 보관 데이터 전부 사용합니다.
-  const MAX_REVIEWS = 2000;
+  const MAX_REVIEWS = 800; // 연간 후기 전체 목록까지 보존
+  const ROLLING_MONTHS = 3; // 메인 캐러셀은 최근 3개월만 표시
   const MIN_LOCAL_REVIEWS = 20;
   const SOURCE_LIST_PAGES = 30;
   const SOURCE_MAX_DETAIL_FETCHES = 360;
@@ -225,14 +225,14 @@
   const SOURCE_CACHE_TTL = 30 * 60 * 1000;
   const LOCAL_FRESH_DAYS = 14; // 오래된 JSON을 최신 후기처럼 먼저 노출하지 않는다.
 
-  let renderedReviews = [];
-  let allReviews = [];
-  let reviewDialogView = '';
-  let reviewDetailFromList = false;
-  let reviewListScrollTop = 0;
+  let renderedReviews = []; // 연간(연초 3개월은 전년도 포함) 전체 후기
+  let rollingReviews = [];  // 메인 화면 최근 3개월
   let reviewDialog = null;
   let reviewDialogReturnFocus = null;
   let reviewHistoryActive = false;
+  let reviewHistoryDepth = 0;
+  let reviewDialogView = null;
+  let reviewGridScrollTop = 0;
   let reviewClosingFromPopstate = false;
   let reviewReturnScroll = null;
   let activeReviewImages = [];
@@ -244,12 +244,14 @@
     if (!pendingReviewVehicle) return;
     const target = pendingReviewVehicle;
     pendingReviewVehicle = null;
+    // 닫기/뒤로 가기에서 예약된 위치 복원이 끝난 뒤 차량 목록으로 이동.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       window.autogenieReviewVehicleBridge?.openVehicleList(target);
     }));
   }
 
-  let hiddenAfterBrandSelection = false;
+  // 초기 URL 차량 선택도 일반 차량 클릭과 동일하게 후기 숨김 상태를 유지합니다.
+  let hiddenAfterBrandSelection = section.hidden;
   let sourceRefreshStarted = false;
   let reviewSwiper = null;
 
@@ -289,6 +291,28 @@
     return date;
   }
 
+  // 연도 기준과 달력상의 3개월은 한국 날짜로 판정한다.
+  // 1~3월은 신규 후기 부족을 방지하기 위해 전년도 1월부터 함께 표시한다.
+  function koreaYearAndMonth() {
+    const values = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric'
+    }).formatToParts(new Date());
+    const value = type => Number(values.find(p => p.type === type)?.value);
+    return { year: value('year'), month: value('month'), day: value('day') };
+  }
+
+  function galleryStartDate() {
+    const { year, month } = koreaYearAndMonth();
+    return new Date(year - (month <= 3 ? 1 : 0), 0, 1);
+  }
+
+  function rollingStartDate() {
+    const { year, month, day } = koreaYearAndMonth();
+    const first = new Date(year, month - 1 - ROLLING_MONTHS, 1);
+    const lastDay = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    return new Date(first.getFullYear(), first.getMonth(), Math.min(day, lastDay));
+  }
+
   const reviewTimestamp = review => parseReviewDate(review?.date)?.getTime() || 0;
 
   function newestReviewTimestamp(items = []) {
@@ -302,7 +326,7 @@
   }
 
   function showReviewLoading() {
-    section.hidden = false;
+    section.hidden = hiddenAfterBrandSelection;
     destroyReviewSwiper();
     track.innerHTML = `<article class="review-card review-card--loading">
       <div class="review-card__body">
@@ -329,42 +353,22 @@
     return `${y}.${m}.${d}`;
   }
 
-  // 한국 날짜 기준으로 연도 전환을 계산합니다. 1~3월은 전년도+당해 연도,
-  // 4월부터는 당해 연도만 전체보기 목록에 유지합니다.
-  function reviewPeriod(today = new Date()) {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric'
-    }).formatToParts(today);
-    const part = type => Number(parts.find(item => item.type === type)?.value);
-    const year = part('year');
-    const month = part('month');
-    const day = part('day');
-    const firstYear = month <= 3 ? year - 1 : year;
-    // setMonth()를 그대로 쓰면 31일 기준 월말이 다음 달로 넘어갈 수 있어 보정합니다.
-    const targetMonthIndex = month - 1 - 3;
-    const lastDayInTargetMonth = new Date(year, targetMonthIndex + 1, 0).getDate();
-    const rollingStart = new Date(year, targetMonthIndex, Math.min(day, lastDayInTargetMonth));
-    rollingStart.setHours(0, 0, 0, 0);
-    return {
-      year,
-      firstYear,
-      archiveStart: new Date(firstYear, 0, 1).getTime(),
-      rollingStart: rollingStart.getTime(),
-      todayEnd: new Date(year, month - 1, day, 23, 59, 59, 999).getTime()
-    };
-  }
-
   function prepareReviews(items) {
-    const period = reviewPeriod();
+    const cutoff = galleryStartDate();
+
+    // GitHub Actions가 /review 게시판에서 수집한 순서를 그대로 사용한다.
+    // 날짜로 다시 sort하지 않아 실제 후기 카테고리의 최신 → 과거 순서가 뒤섞이지 않는다.
     const prepared = (items || [])
       .filter(review => Boolean(review?.title))
-      // 기존 네이버용 국산차 필터를 그대로 적용합니다.
+      // 국산차 전용: 브랜드명 없는 E200/BYD 등 수입 모델도 제외.
       .filter(review => reviewMarket(review) === 'domestic')
       .map((review, inputOrder) => ({ ...review, _inputOrder: inputOrder, _timestamp: reviewTimestamp(review) }))
-      .filter(review => review._timestamp >= period.archiveStart && review._timestamp <= period.todayEnd)
-      .sort((a, b) => b._timestamp - a._timestamp ||
-        (Number.isFinite(+a.sourceOrder) ? +a.sourceOrder : a._inputOrder) -
-        (Number.isFinite(+b.sourceOrder) ? +b.sourceOrder : b._inputOrder));
+      .filter(review => review._timestamp >= cutoff.getTime())
+      .sort((a, b) => {
+        const ao = Number.isFinite(Number(a.sourceOrder)) ? Number(a.sourceOrder) : a._inputOrder;
+        const bo = Number.isFinite(Number(b.sourceOrder)) ? Number(b.sourceOrder) : b._inputOrder;
+        return ao - bo;
+      });
 
     const seen = new Set();
     const unique = [];
@@ -377,11 +381,6 @@
       if (unique.length >= MAX_REVIEWS) break;
     }
     return unique;
-  }
-
-  function rollingReviews(items) {
-    const cutoff = reviewPeriod().rollingStart;
-    return (items || []).filter(review => reviewTimestamp(review) >= cutoff);
   }
 
   function detailLines(review) {
@@ -448,86 +447,22 @@
     requestAnimationFrame(() => window.scrollTo(x, y));
   }
 
-  function ensureReviewDialog() {
-    if (reviewDialog) return reviewDialog;
-    reviewDialog = document.createElement('dialog');
-    reviewDialog.className = 'autogenie-review-dialog';
-    reviewDialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
-    document.body.appendChild(reviewDialog);
-    reviewDialog.addEventListener('click', event => {
-      if (event.target === reviewDialog || event.target.closest('[data-review-close]')) {
-        closeReviewDialog();
-        return;
-      }
-      if (event.target.closest('[data-review-vehicle-go]')) {
-        if (!activeReviewVehicle) return;
-        pendingReviewVehicle = activeReviewVehicle;
-        closeReviewDialog();
-        if (!reviewHistoryActive) navigateToPendingReviewVehicle();
-        return;
-      }
-      if (event.target.closest('[data-review-back-list]')) {
-        showAllReviews(true);
-        return;
-      }
-      const link = event.target.closest('[data-review-open]');
-      if (link) {
-        event.preventDefault();
-        const review = allReviews.find(item => reviewKey(item) === link.dataset.reviewOpen);
-        if (review) {
-          reviewListScrollTop = reviewDialog.querySelector('.review-all-scroll')?.scrollTop || 0;
-          reviewDetailFromList = true;
-          openReview(review);
-        }
-        return;
-      }
-      const direction = event.target.closest('[data-review-image-shift]');
-      if (direction) showReviewImage(activeReviewImageIndex + Number(direction.dataset.reviewImageShift));
-      const thumb = event.target.closest('[data-review-thumb]');
-      if (thumb) showReviewImage(Number(thumb.dataset.reviewThumb));
-    });
-    reviewDialog.addEventListener('cancel', event => {
-      event.preventDefault();
-      closeReviewDialog();
-    });
-    reviewDialog.addEventListener('close', () => {
-      document.body.classList.remove('review-dialog-open');
-      if (reviewDialogReturnFocus?.isConnected) reviewDialogReturnFocus.focus({ preventScroll: true });
-      restoreReviewScroll();
-      // X/ESC/바깥 클릭: 후기 전용 히스토리만 되돌린다.
-      // reviewHistoryActive는 popstate에서 해제해야 견적 단계 변경을 막을 수 있다.
-      if (reviewHistoryActive && !reviewClosingFromPopstate) history.back();
-      reviewClosingFromPopstate = false;
-    });
-    return reviewDialog;
-  }
-
-  function showReviewDialog(dialog) {
-    if (!dialog.open) {
-      reviewReturnScroll = { x: window.scrollX, y: window.scrollY };
-      reviewDialogReturnFocus = document.activeElement;
-      history.pushState({ ...((history.state && typeof history.state === 'object') ? history.state : {}), autogenieReviewDialog: true }, '', location.href);
-      reviewHistoryActive = true;
-      dialog.showModal();
-    }
-    document.body.classList.add('review-dialog-open');
-    // 열릴 때 자동 포커스가 닫기 버튼에 걸려 검은 원형 테두리가 생기지 않도록
-    // 후기 제목으로 포커스를 이동합니다. 탭 키로 닫기 버튼에 접근할 수 있습니다.
-    const heading = dialog.querySelector('.review-detail-head h2');
-    if (heading) {
-      heading.setAttribute('tabindex', '-1');
-      heading.focus({ preventScroll: true });
-    }
-  }
-
-  function allReviewCard(review) {
-    const title = escapeHtml(cleanReviewTitle(review.title));
-    const date = escapeHtml(formatReviewDate(review.date));
-    const photo = String(review.image || '').trim();
-    return `<a class="review-all-card" href="#review-detail" data-review-open="${escapeHtml(reviewKey(review))}">
-      <span class="review-all-card__photo">${photo ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="review-all-card__empty">후기 이미지 준비 중</span>'}</span>
-      <span class="review-all-card__info"><strong>${title}</strong><time>${date}</time></span>
-    </a>`;
+  // 전체 후기 보기는 올해(1~3월에는 전년도 포함)를 모달 카드 목록으로 표시한다.
+  function reviewGridTemplate(review) {
+    const title = cleanReviewTitle(review.title);
+    const date = formatReviewDate(review.date);
+    const cover = String(review.image || '').trim();
+    return `<li class="review-gallery-card">
+      <button type="button" class="review-gallery-card__button" data-review-grid-open="${escapeHtml(review.id)}" aria-label="${escapeHtml(title)} 상세 후기 보기">
+        <span class="review-gallery-card__cover">${cover
+          ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+          : `<span class="review-gallery-card__placeholder">후기 이미지 준비 중</span>`}</span>
+        <span class="review-gallery-card__content">
+          <strong class="review-gallery-card__title">${escapeHtml(title)}</strong>
+          ${date ? `<time class="review-gallery-card__date" datetime="${escapeHtml(review.date)}">${escapeHtml(date)}</time>` : ''}
+        </span>
+      </button>
+    </li>`;
   }
 
   // 전체 후기 목록의 스크롤 영역에만 적용: 상세 페이지/메인 화면 스크롤은 변경하지 않음.
@@ -586,34 +521,111 @@
     updateVisibility();
   }
 
-  function showAllReviews(restoreScroll = false) {
+  function renderReviewGallery() {
     const dialog = ensureReviewDialog();
-    const { year, firstYear } = reviewPeriod();
-    const periodTitle = firstYear < year ? `${firstYear}~${year}년 출고 후기` : `${year}년 출고 후기`;
-    if (!restoreScroll) {
-      reviewListScrollTop = 0;
-      reviewDetailFromList = false;
-    }
     reviewDialogView = 'list';
+    dialog.classList.add('autogenie-review-dialog--gallery');
     dialog.setAttribute('aria-label', '오토지니 전체 출고 후기 목록');
-    dialog.innerHTML = `<div class="review-detail-panel review-all-panel">
-      <header class="review-detail-head"><div><span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
-      <h2>오토지니 실제 출고 후기</h2><p class="review-all-count">${escapeHtml(periodTitle)} · 원하는 후기를 선택해 주세요.</p></div>
-      <button type="button" class="review-detail-close" data-review-close aria-label="전체 후기 닫기">×</button></header>
-      <div class="review-detail-scroll review-all-scroll">
-        ${allReviews.length ? `<div class="review-all-grid">${allReviews.map(allReviewCard).join('')}</div>` : '<p class="review-all-empty">해당 기간에 등록된 출고 후기가 없습니다.</p>'}
+    dialog.innerHTML = `<div class="review-gallery-panel">
+      <header class="review-gallery-head">
+        <div class="review-gallery-head__info">
+          <span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
+          <h2>오토지니 실제 출고 후기</h2>
+          <p>${(() => { const { year, month } = koreaYearAndMonth(); return month <= 3 ? `${year - 1}~${year}년 출고 후기` : `${year}년 출고 후기`; })()} · 원하는 후기를 선택해 주세요.</p>
+        </div>
+        <button type="button" class="review-detail-close" data-review-close aria-label="후기 목록 닫기">×</button>
+      </header>
+      <div class="review-gallery-scroll">
+        ${renderedReviews.length
+          ? `<ul class="review-gallery-grid">${renderedReviews.map(reviewGridTemplate).join('')}</ul>`
+          : '<p class="review-gallery-empty">표시할 출고 후기가 없습니다.</p>'}
       </div>
       <button type="button" class="review-scroll-top" data-review-scroll-top aria-label="후기 목록 맨 위로 이동" title="맨 위로" hidden><span aria-hidden="true">↑</span></button>
     </div>`;
-    showReviewDialog(dialog);
-    dialog.querySelector('.review-all-scroll').scrollTop = restoreScroll ? reviewListScrollTop : 0;
-    setupReviewScrollTop(dialog, '.review-all-scroll');
-    dialog.querySelectorAll('.review-all-card__photo img').forEach(img => {
-      img.addEventListener('error', () => {
-        const slot = img.closest('.review-all-card__photo');
-        if (slot) slot.innerHTML = '<span class="review-all-card__empty">후기 이미지 준비 중</span>';
-      }, { once: true });
+    const scrollArea = dialog.querySelector('.review-gallery-scroll');
+    if (scrollArea) scrollArea.scrollTop = reviewGridScrollTop;
+    setupReviewScrollTop(dialog, '.review-gallery-scroll');
+  }
+
+  function beginReviewDialog(view) {
+    const dialog = ensureReviewDialog();
+    if (!dialog.open) {
+      reviewReturnScroll = { x: window.scrollX, y: window.scrollY };
+      reviewDialogReturnFocus = document.activeElement;
+      reviewHistoryDepth = 0;
+      reviewGridScrollTop = 0;
+      dialog.showModal();
+    }
+    history.pushState({ ...((history.state && typeof history.state === 'object') ? history.state : {}),
+      autogenieReviewDialog: true, autogenieReviewView: view }, '', location.href);
+    reviewHistoryDepth += 1;
+    reviewHistoryActive = true;
+    document.body.classList.add('review-dialog-open');
+  }
+
+  function openReviewGallery() {
+    if (!renderedReviews.length) return;
+    const dialog = ensureReviewDialog();
+    if (!dialog.open) beginReviewDialog('list');
+    renderReviewGallery();
+    dialog.querySelector('.review-gallery-scroll')?.scrollTo(0, 0);
+  }
+
+  function returnToReviewGallery() {
+    if (reviewDialogView !== 'detail') return;
+    if (reviewHistoryActive && reviewHistoryDepth > 1) {
+      history.back();
+    } else {
+      // 캐러셀에서 곧장 진입한 경우에는 목록을 새 단계로 보여준다.
+      beginReviewDialog('list');
+      reviewGridScrollTop = 0;
+      renderReviewGallery();
+    }
+  }
+
+  function ensureReviewDialog() {
+    if (reviewDialog) return reviewDialog;
+    reviewDialog = document.createElement('dialog');
+    reviewDialog.className = 'autogenie-review-dialog';
+    reviewDialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
+    document.body.appendChild(reviewDialog);
+    reviewDialog.addEventListener('click', event => {
+      if (event.target === reviewDialog || event.target.closest('[data-review-close]')) closeReviewDialog();
+      const direction = event.target.closest('[data-review-image-shift]');
+      if (direction) showReviewImage(activeReviewImageIndex + Number(direction.dataset.reviewImageShift));
+      const thumb = event.target.closest('[data-review-thumb]');
+      if (thumb) showReviewImage(Number(thumb.dataset.reviewThumb));
+      const gridCard = event.target.closest('[data-review-grid-open]');
+      if (gridCard) {
+        const selected = renderedReviews.find(item => String(item.id) === gridCard.dataset.reviewGridOpen);
+        if (selected) {
+          reviewGridScrollTop = reviewDialog.querySelector('.review-gallery-scroll')?.scrollTop || 0;
+          openReview(selected);
+        }
+      }
+      if (event.target.closest('[data-review-vehicle-go]')) {
+        if (!activeReviewVehicle) return;
+        pendingReviewVehicle = activeReviewVehicle;
+        closeReviewDialog();
+        if (!reviewHistoryActive) navigateToPendingReviewVehicle();
+        return;
+      }
+      if (event.target.closest('[data-review-list-back]')) returnToReviewGallery();
     });
+    reviewDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeReviewDialog();
+    });
+    reviewDialog.addEventListener('close', () => {
+      document.body.classList.remove('review-dialog-open');
+      if (reviewDialogReturnFocus?.isConnected) reviewDialogReturnFocus.focus({ preventScroll: true });
+      restoreReviewScroll();
+      // X/ESC/바깥 클릭: 후기 전용 히스토리만 되돌린다.
+      // reviewHistoryActive는 popstate에서 해제해야 견적 단계 변경을 막을 수 있다.
+      if (reviewHistoryActive && !reviewClosingFromPopstate) history.go(-Math.max(1, reviewHistoryDepth));
+      reviewClosingFromPopstate = false;
+    });
+    return reviewDialog;
   }
 
   function closeReviewDialog() {
@@ -622,9 +634,16 @@
 
   window.addEventListener('popstate', event => {
     if (!reviewHistoryActive) return;
-    // 견적 스크립트의 popstate가 render() / scrollToEstimate()를 호출하지 않게 차단.
+    // 견적 단계가 다른 스크립트에서 popstate를 받지 못하게 후기 이벤트를 먼저 처리한다.
     event.stopImmediatePropagation();
+    if (event.state?.autogenieReviewDialog && event.state?.autogenieReviewView === 'list' && reviewHistoryDepth > 1) {
+      reviewHistoryDepth = 1;
+      renderReviewGallery();
+      return;
+    }
     reviewHistoryActive = false;
+    reviewHistoryDepth = 0;
+    reviewDialogView = null;
     reviewClosingFromPopstate = true;
     if (reviewDialog?.open) reviewDialog.close();
     else {
@@ -829,8 +848,7 @@
 
   function openReview(review) {
     const dialog = ensureReviewDialog();
-    reviewDialogView = 'detail';
-    dialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
+    const isFromGallery = dialog.open && reviewDialogView === 'list';
     const details = detailLines(review);
     const blocks = Array.isArray(review.contentBlocks) ? review.contentBlocks : [];
     const validBlocks = blocks.filter(block => block && (block.type === 'text' && typeof block.text === 'string' || block.type === 'image' && typeof block.url === 'string' && /^https?:\/\//i.test(block.url)));
@@ -880,13 +898,19 @@
         </button>
       </div>` : '';
 
+    reviewDialogView = 'detail';
+    dialog.classList.remove('autogenie-review-dialog--gallery');
+    dialog.setAttribute('aria-label', '오토지니 출고 후기 상세');
     dialog.innerHTML = `<div class="review-detail-panel review-detail-panel--blog">
-      <header class="review-detail-head"><div>${reviewDetailFromList ? '<button type="button" class="review-back-list" data-review-back-list>← 후기 목록</button>' : ''}<span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
+      <header class="review-detail-head"><div>
+      ${isFromGallery ? '<button type="button" class="review-detail-back" data-review-list-back aria-label="후기 목록으로 돌아가기">← 후기 목록</button>' : ''}
+      <span class="review-detail-eyebrow">REAL DELIVERY REVIEW</span>
       <h2>${escapeHtml(cleanReviewTitle(review.title))}</h2><time>${escapeHtml(formatReviewDate(review.date))}</time></div>
       <button type="button" class="review-detail-close" data-review-close aria-label="후기 닫기">×</button></header>
       <div class="review-detail-scroll review-blog-scroll"><article class="review-blog-article">${articleHtml}</article>${reviewVehicleCta}</div>
     </div>`;
-    showReviewDialog(dialog);
+    // 상세로 직접 진입한 경우와 목록에서 진입한 경우 각각 브라우저 히스토리를 한 단계 추가한다.
+    beginReviewDialog('detail');
     filterTrailingReviewPromotions(dialog);
     dialog.querySelector('.review-detail-scroll')?.scrollTo(0, 0);
   }
@@ -895,15 +919,12 @@
     const link = event.target.closest('[data-review-open]');
     if (!link || carousel.classList.contains('is-dragging')) return;
     event.preventDefault();
-    const review = allReviews.find(item => String(item.id) === link.dataset.reviewOpen);
-    if (review) {
-      reviewDetailFromList = false;
-      openReview(review);
-    }
+    const review = renderedReviews.find(item => String(item.id) === link.dataset.reviewOpen);
+    if (review) openReview(review);
   });
   document.querySelector('.review-section__more')?.addEventListener('click', event => {
     event.preventDefault();
-    showAllReviews();
+    openReviewGallery();
   });
 
   function destroyReviewSwiper() {
@@ -914,7 +935,7 @@
 
   function initReviewSwiper() {
     destroyReviewSwiper();
-    if (!renderedReviews.length || hiddenAfterBrandSelection) return;
+    if (!rollingReviews.length || hiddenAfterBrandSelection) return;
 
     // Swiper가 외부 스크립트 로딩 문제로 없을 경우 카드 목록은 그대로 보이게 둔다.
     if (typeof window.Swiper !== 'function') {
@@ -922,7 +943,7 @@
       return;
     }
 
-    const canMove = renderedReviews.length > 1;
+    const canMove = rollingReviews.length > 1;
     reviewSwiper = new window.Swiper(carousel, {
       slidesPerView: 'auto',
       spaceBetween: 14,
@@ -1002,11 +1023,11 @@
   }
 
   function renderReviewList(items) {
-    allReviews = prepareReviews(items);
-    refreshReviewPromotionKeys(allReviews);
-    const reviews = rollingReviews(allReviews);
+    const reviews = prepareReviews(items);
+    refreshReviewPromotionKeys(reviews);
     renderedReviews = reviews;
-
+    rollingReviews = reviews.filter(review => reviewTimestamp(review) >= rollingStartDate().getTime());
+    if (reviewDialog?.open && reviewDialogView === 'list') renderReviewGallery();
 
     if (hiddenAfterBrandSelection) {
       section.hidden = true;
@@ -1015,7 +1036,7 @@
     }
 
     section.hidden = false;
-    track.innerHTML = reviews.length ? reviews.map(cardTemplate).join('') : `<article class="review-card review-card--loading"><div class="review-card__body"><strong>최근 3개월 동안 등록된 출고 후기가 없습니다.</strong><p>전체 후기 보기에서 이전 출고 사례를 확인해 보세요.</p></div></article>`;
+    track.innerHTML = rollingReviews.length ? rollingReviews.map(cardTemplate).join('') : `<article class="review-card review-card--loading"><div class="review-card__body"><strong>최근 3개월 출고 후기가 없습니다.</strong><p>전체 후기 보기를 누르면 이전 출고 후기도 확인할 수 있습니다.</p></div></article>`;
     bindImageFallbacks();
 
     // DOM 크기가 계산된 다음 Swiper를 초기화해야 slidesPerView:auto가 정확하게 작동한다.
@@ -1220,8 +1241,7 @@
     if (reviews.length) {
       renderReviewList(reviews);
     } else {
-      section.hidden = false;
-      allReviews = [];
+      section.hidden = hiddenAfterBrandSelection;
       destroyReviewSwiper();
       track.innerHTML = `<article class="review-card review-card--loading">
         <div class="review-card__body">

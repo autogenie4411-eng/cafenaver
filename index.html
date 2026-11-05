@@ -29,12 +29,24 @@
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/layer.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css">
-    <link rel="stylesheet" href="css/style.css?v=20261021-review-vehicle-link-v2">
+    <link rel="stylesheet" href="css/style.css?v=20261103-delivery-event-01">
+  <!-- 차량별 직접 링크는 준비 완료 전까지 로딩 커버를 유지합니다. -->
+  <script>
+    if (new URLSearchParams(location.search).has("car")) {
+      document.documentElement.classList.add("vehicle-deeplink-entry");
+    }
+  </script>
+  <style>
+    html.vehicle-deeplink-entry .landing-loader {
+      animation: none !important;
+      opacity: 1;
+      visibility: visible;
+    }
+  </style>
 </head>
 <body>
 
-
-  <div class="landing-loader" id="landingLoader" role="status" aria-live="polite" aria-label="견적 화면을 준비하고 있습니다.">
+<div class="landing-loader" id="landingLoader" role="status" aria-live="polite" aria-label="견적 화면을 준비하고 있습니다.">
     <div class="loader-content">
       <div class="loader-copy">
         <p>AUTOGENIE</p>
@@ -58,18 +70,25 @@
     <div class="customer-care__body">
       <div class="customer-care__channels">
         <!-- <a class="customer-care__channel" href="tel:1600-3481" aria-label="전화 상담 1600-3487"> -->
-        <a class="customer-care__channel" aria-label="전화 상담 010-2870-2605">
+        <a class="customer-care__channel" aria-label="전화 상담 1600-3481">
           <svg class="customer-care__phone" viewBox="0 0 32 32" aria-hidden="true">
             <path d="M9.1 4.8 13 4a2 2 0 0 1 2.3 1.5l1.1 4.7a2 2 0 0 1-.6 1.9l-2.1 2c1.4 3.1 3.8 5.5 6.9 6.9l2-2.1a2 2 0 0 1 1.9-.6l4.7 1.1a2 2 0 0 1 1.5 2.3l-.8 3.9a3 3 0 0 1-3 2.4C14.2 27.5 4.5 17.8 4 7.8a3 3 0 0 1 2.4-3Z"></path>
           </svg>
           <span class="customer-care__channel-copy">
             <strong>전화 상담</strong>
-            <b>010-2870-2605</b>
+            <b>1600-3481</b>
           </span>
           <span class="customer-care__arrow" aria-hidden="true">›</span>
         </a>
 
-
+        <a class="customer-care__channel" href="http://pf.kakao.com/_xbkxkGn/chat" target="_blank" rel="noopener noreferrer" aria-label="카카오톡 상담 페이지 열기">
+          <span class="customer-care__talk" aria-hidden="true"><span class="customer-care__talk-bubble">TALK</span></span>
+          <span class="customer-care__channel-copy">
+            <strong>카카오톡 상담</strong>
+            <small>채널로 빠르게 문의하기</small>
+          </span>
+          <span class="customer-care__arrow" aria-hidden="true">›</span>
+        </a>
       </div>
 
       <section class="customer-care__hours" aria-label="고객센터 운영시간">
@@ -280,7 +299,7 @@
         <div><dt>사업자등록번호</dt><dd>438-87-03620</dd></div>
         <div><dt>이메일</dt><dd><a href="mailto:chayogi8934@naver.com">chayogi8934@naver.com</a></dd></div>
         <div class="wide"><dt>주소</dt><dd>인천광역시 연수구 송도동 10-7, 7층 707-차55호</dd></div>
-        <div><dt>대표전화</dt><dd><a href="tel:010-2870-2605">010-2870-2605</a></dd></div>
+        <div><dt>대표전화</dt><dd><a href="tel:1600-3481">1600-3481</a></dd></div>
         <div><dt>상담시간</dt><dd>평일 09:00 - 18:00 상담 가능</dd></div>
       </dl>
 
@@ -288,7 +307,79 @@
     </footer>
   </main>
 
-  <script src="js/script.js?v=20261022-review-full-typo-v2"></script>
+  <!-- STEP 02: 트림 확인 팝업 (선택 확정 전 안내) -->
+  <dialog class="trim-detail-modal" id="trimDetailModal" aria-labelledby="trimDetailModalTitle" aria-describedby="trimDetailModalSummary">
+    <div class="trim-detail-modal__panel">
+      <header class="trim-detail-modal__header">
+        <button type="button" class="trim-detail-modal__back" data-trim-close aria-label="트림 목록으로 돌아가기">
+          <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span class="trim-detail-modal__eyebrow">트림 상세 안내</span>
+        <button type="button" class="trim-detail-modal__close" data-trim-close aria-label="트림 안내 닫기">×</button>
+      </header>
+      <div class="trim-detail-modal__body">
+        <div class="trim-detail-modal__vehicle" id="trimDetailVehicle"></div>
+        <h2 id="trimDetailModalTitle" class="trim-detail-modal__title" tabindex="-1"></h2>
+        <figure class="trim-detail-modal__visual" id="trimDetailVisual" hidden>
+          <div class="trim-detail-modal__visual-heading">
+            <span id="trimDetailFeatureLabel">대표 핵심 기능</span>
+            <strong id="trimDetailFeatureName"></strong>
+          </div>
+          <img id="trimDetailImage" alt="" decoding="async">
+          <figcaption id="trimDetailImageCaption"></figcaption>
+        </figure>
+        <p class="trim-detail-modal__summary" id="trimDetailModalSummary"></p>
+        <section class="trim-detail-modal__info" aria-labelledby="trimDetailCompareTitle">
+          <h3 id="trimDetailCompareTitle">트림별로 달라질 수 있는 부분</h3>
+          <div class="trim-detail-modal__comparison" id="trimDetailComparison" hidden>
+            <div class="trim-detail-modal__comparison-group trim-detail-modal__comparison-group--inherited">
+              <strong class="trim-detail-modal__comparison-label" id="trimDetailInheritedTitle">이전 트림에서 이어지는 주요 사양</strong>
+              <ul class="trim-detail-modal__highlights trim-detail-modal__highlights--inherited" id="trimDetailInheritedList"></ul>
+            </div>
+            <div class="trim-detail-modal__comparison-group trim-detail-modal__comparison-group--upgrade">
+              <div class="trim-detail-modal__comparison-upgrade-top">
+                <span class="trim-detail-modal__upgrade-badge">UPGRADE</span>
+                <strong class="trim-detail-modal__comparison-label" id="trimDetailAddedTitle">새로 추가된 기능</strong>
+              </div>
+              <ul class="trim-detail-modal__highlights trim-detail-modal__highlights--upgrade" id="trimDetailAddedList"></ul>
+            </div>
+            <p class="trim-detail-modal__comparison-foot" id="trimDetailComparisonFoot"></p>
+          </div>
+          <ul class="trim-detail-modal__highlights" id="trimDetailHighlights"></ul>
+        </section>
+        <div class="trim-detail-modal__notice">
+          <strong>선택 전 확인해 주세요</strong>
+          <p>기본 사양과 선택 옵션은 차량, 연식, 세부모델에 따라 달라질 수 있습니다. 정확한 구성은 상담 시 확인해 주세요.</p>
+        </div>
+      </div>
+      <footer class="trim-detail-modal__footer">
+        <p class="trim-detail-modal__question">이 트림을 선택하시겠습니까?</p>
+        <div class="trim-detail-modal__actions">
+          <button type="button" class="trim-detail-modal__cancel" data-trim-close><span class="trim-detail-modal__cancel-desktop">다른 트림 살펴보기</span><span class="trim-detail-modal__cancel-mobile">다른 트림 살펴보기</span></button>
+          <button type="button" class="trim-detail-modal__confirm" id="confirmTrimSelection">이 트림 선택하기</button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- 견적 신청 제한 안내 -->
+  <dialog class="estimate-block-modal" id="estimateBlockModal" aria-labelledby="estimateBlockTitle" aria-describedby="estimateBlockDescription">
+    <div class="estimate-block-modal__content">
+      <div class="estimate-block-modal__symbol" aria-hidden="true">!</div>
+      <h2 id="estimateBlockTitle">견적 신청이 제한되었습니다</h2>
+      <p class="estimate-block-modal__reason" id="estimateBlockDescription">반복적인 허위 견적 신청 및 서비스 이용 방해 행위가 확인되어 견적 신청이 제한되었습니다.</p>
+      <div class="estimate-block-modal__warning">
+        <strong>⚠ 법적 조치 안내</strong>
+        <p>동일한 행위가 지속될 경우 관련 법령에 따라 법적 조치가 취해질 수 있습니다.</p>
+      </div>
+      <p class="estimate-block-modal__support">정상적인 상담을 원하시는 경우 고객센터로 문의해 주세요.</p>
+      <button class="estimate-block-modal__confirm" type="button" data-estimate-block-close>확인</button>
+    </div>
+  </dialog>
+
+  <script src="js/traffic-tracker.js?v=20261027"></script>
+  <script src="js/trim-reference-data.js?v=20261029-kia5-upgrade-ui-02"></script>
+  <script src="js/script.js?v=20261104-deeplink-intro-fix-01"></script>
   <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
   <script src="js/reviews.js?v=20261022-review-full-ad-safe-v2"></script>
 

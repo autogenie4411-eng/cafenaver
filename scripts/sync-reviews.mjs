@@ -3,9 +3,9 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const SOURCE = 'https://www.agautoplan.com/review';
-const MAX_PAGES = 120; // 최초 전체 연도 수집 시 오래된 페이지까지 탐색
-const MAX_REVIEWS = 2000; // 최근 2개월 제한 대신 보관 연도 전체를 수집
-const MAX_CONSECUTIVE_ERRORS = 8;
+const ROLLING_MONTHS = 3; // 사이트 메인 화면 필터와 동일한 기간
+const MAX_PAGES = 100; // 1년 이상 게시글을 탐색할 수 있도록 확대
+const MAX_REVIEWS = 800; // 연간 후기 상한, 필요 시 추가 확대 가능
 const OUTPUT = path.resolve('data/reviews.json');
 
 // 후기 분류는 메이커 + 국내/수입 차종명을 함께 검사합니다.
@@ -70,23 +70,6 @@ function reviewMarket(review = {}) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-// 매년 1~3월에는 전년도 후기까지 유지하고 4월 1일부터 당해 연도만 유지합니다.
-function reviewRetentionStart() {
-  const today = koreaToday();
-  const year = today.getFullYear();
-  const month = today.getMonth() + 1;
-  return new Date(month <= 3 ? year - 1 : year, 0, 1);
-}
-
-async function previousReviews() {
-  try {
-    const payload = JSON.parse(await fs.readFile(OUTPUT, 'utf8'));
-    return Array.isArray(payload) ? payload : (Array.isArray(payload.reviews) ? payload.reviews : []);
-  } catch {
-    return [];
-  }
-}
-
 
 function koreaToday() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -98,6 +81,21 @@ function koreaToday() {
 
   const value = type => Number(parts.find(part => part.type === type)?.value || 0);
   return new Date(value('year'), value('month') - 1, value('day'));
+}
+
+// 한국 날짜 기준. 1~3월에는 전년도 전체 + 올해를 함께 보존한다.
+function galleryStartDate() {
+  const today = koreaToday();
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+  return new Date(year - (month <= 3 ? 1 : 0), 0, 1);
+}
+
+function rollingStartDate() {
+  const today = koreaToday();
+  const first = new Date(today.getFullYear(), today.getMonth() - ROLLING_MONTHS, 1);
+  const lastDay = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return new Date(first.getFullYear(), first.getMonth(), Math.min(today.getDate(), lastDay));
 }
 
 function parseRelativeDate(text = '') {
@@ -364,11 +362,12 @@ async function collectBoardOrder(page) {
 
     if (!items.length) break;
 
-    // 자동 갱신 시에도 전년도(1~3월)/올해(4~12월) 보관 경계까지 탐색합니다.
-    const cutoff = reviewRetentionStart();
+    // 올해 연간 구간(연초 3개월에는 전년도 포함)에 도달할 때까지 탐색한다.
+    const cutoff = galleryStartDate();
+
     const pageDates = items.map(item => parseDate(item.text)).filter(Boolean);
     if (pageDates.length && pageDates.every(date => date < cutoff)) {
-      console.log(`목록 ${pageNo}페이지에서 ${isoDate(cutoff)} 이전 도달, 탐색 종료`);
+      console.log(`목록 ${pageNo}페이지에서 전체 후기 시작일 ${isoDate(cutoff)} 이전에 도달하여 탐색 종료`);
       break;
     }
 
@@ -778,7 +777,8 @@ async function parseDetail(page, item) {
     return null;
   }
 
-  const cutoff = reviewRetentionStart();
+  const cutoff = galleryStartDate();
+
   if (date < cutoff) {
     return { tooOld: true, date };
   }
@@ -837,81 +837,70 @@ try {
 
   const items = await collectBoardOrder(listPage);
 
-  console.log(`게시판 DOM 순서 기준 후기 ${items.length}개 발견`);
+  console.log(`게시판 DOM 순서 기준 후기 ${items.length}개 발견 (수집 시작일: ${isoDate(galleryStartDate())})`);
 
   if (!items.length) {
     throw new Error('후기 게시글을 찾지 못했습니다.');
   }
 
-  // 기존 JSON을 아카이브로 유지합니다. 갱신 실패나 순회 도중 누락이 생겨도
-  // 이미 수집한 올해 후기가 사라지지 않도록 새 글만 보충합니다.
-  const oldReviews = (await previousReviews()).filter(review => {
-    const date = parseDate(review.date);
-    return date && date >= reviewRetentionStart() && reviewMarket(review) === 'domestic';
-  });
-  const oldById = new Map(oldReviews.map(review => [String(review.id), review]));
+  // 이미 수집한 과거 후기는 재활용하여 주 2회 전체 본문을 다시 다운로드하지 않는다.
+  // 사진과 원본 서식 정보가 없는 이전 데이터는 다시 수집한다.
+  let existingReviews = [];
+  try {
+    const previous = JSON.parse(await fs.readFile(OUTPUT, 'utf8'));
+    existingReviews = Array.isArray(previous) ? previous : (previous.reviews || []);
+  } catch { /* 첫 실행 / 데이터 파일 없음 */ }
+  const previousById = new Map(existingReviews.map(r => [String(r.id), r]));
+  const recentCutoff = rollingStartDate();
   const detailPage = await context.newPage();
-  const fresh = [];
-  let errors = 0;
+  const reviews = [];
 
-  for (let i = 0; i < items.length && fresh.length + oldReviews.length < MAX_REVIEWS; i++) {
+  for (let i = 0; i < items.length && reviews.length < MAX_REVIEWS; i++) {
     const item = items[i];
-    const old = oldById.get(String(item.id));
-    if (old) {
-      old.sourceOrder = item.sourceOrder;
-      // 이전 버전의 JSON은 상세 본문이 없는 목록 데이터만 저장했습니다.
-      // 상세 팝업을 완성할 수 있도록 본문 미보유 건은 다시 수집합니다.
-      const hasDetails = Boolean(old.articleHtml || old.body || old.contentBlocks?.length);
-      if (hasDetails) continue;
-    }
-    const parsed = await parseDetail(detailPage, item);
+    const prior = previousById.get(String(item.id));
+    const knownDate = item.listDate || (prior ? parseDate(prior.date) : null);
+    const canReuse = prior && knownDate && knownDate < recentCutoff &&
+      knownDate >= galleryStartDate() && prior.articleHtml && prior.image &&
+      Array.isArray(prior.images) && prior.images.length &&
+      Array.isArray(prior.contentBlocks);
+    const parsed = canReuse ? { ...prior, sourceOrder: item.sourceOrder }
+      : await parseDetail(detailPage, item);
+
     if (parsed?.tooOld) {
-      console.log(`보관 기간 시작(${isoDate(reviewRetentionStart())}) 이전 도달: ${isoDate(parsed.date)}`);
+      console.log(`전체 후기 범위(${isoDate(galleryStartDate())} 이후) 종료 지점: ${isoDate(parsed.date)}`);
       break;
     }
+
     if (parsed) {
-      errors = 0;
       parsed.title = normalizeReviewTitle(parsed.title) || parsed.title;
-      // 신규 글은 추가하고, 기존 글은 새 상세 정보만 보강합니다.
-      if (old) {
-        fresh.push({ ...old, ...parsed, image: parsed.image || old.image, body: parsed.body || old.body,
-          articleHtml: parsed.articleHtml || old.articleHtml || '',
-          images: parsed.images?.length ? parsed.images : old.images,
-          contentBlocks: parsed.contentBlocks?.length ? parsed.contentBlocks : old.contentBlocks });
-      } else {
-        fresh.push(parsed);
-      }
-      console.log(`[${old ? '상세 보강' : '신규 추가'} ${fresh.length}] #${parsed.sourceOrder} ${parsed.date} ${parsed.title}`);
-    } else {
-      errors++;
-      if (errors >= MAX_CONSECUTIVE_ERRORS) {
-        console.warn(`연속 상세 수집 실패 ${errors}건. 기존 데이터를 보존한 채 다음 수집에서 재시도합니다.`);
-        break;
-      }
+      reviews.push(parsed);
+      console.log(`[${reviews.length}] #${parsed.sourceOrder} ${parsed.date} ${parsed.title} (본문 ${parsed.body?.length || 0}자, 사진 ${parsed.images?.length || 0}장, 블록 ${parsed.contentBlocks?.length || 0}개)`);
     }
-    await sleep(180);
+
+    if (!canReuse) await sleep(180);
   }
 
-  const cutoff = reviewRetentionStart();
+  if (!reviews.length) {
+    throw new Error('대상 연도의 출고 후기를 한 건도 수집하지 못했습니다.');
+  }
+
+  const unique = [];
   const seen = new Set();
-  const unique = [...fresh, ...oldReviews]
-    .filter(review => {
-      const date = parseDate(review.date);
-      if (!date || date < cutoff || reviewMarket(review) !== 'domestic') return false;
-      const id = String(review.id);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
-    .sort((a, b) => parseDate(b.date) - parseDate(a.date) ||
-      (Number(a.sourceOrder ?? 999999) - Number(b.sourceOrder ?? 999999)));
 
-  if (!unique.length) {
-    throw new Error('갱신할 국산차 후기를 찾지 못했습니다. 기존 파일을 유지합니다.');
+  for (const review of reviews) {
+    if (seen.has(review.id)) continue;
+    seen.add(review.id);
+    unique.push(review);
   }
 
-  // 아카이브에는 국산차만 저장하며, 이전 기록은 신규 수집 시 덮어쓰기하지 않습니다.
-  const domesticOnly = unique;
+  const firstOrder = unique[0]?.sourceOrder;
+
+  if (firstOrder !== 0) {
+    throw new Error(`최신 후기 누락 감지: 첫 저장 후기 sourceOrder=${firstOrder}. 최신 글을 건너뛴 상태라 stale JSON 저장을 중단합니다.`);
+  }
+
+  // 이 저장소는 국산차 전용 사이트이므로 수입차 후기는 JSON에도 저장하지 않습니다.
+  const domesticOnly = unique.filter(review => reviewMarket(review) === 'domestic');
 
   const invalidSavedTitles = domesticOnly.filter(review => isInvalidTitle(review.title));
   if (invalidSavedTitles.length) {
@@ -932,15 +921,16 @@ try {
     JSON.stringify({
       source: SOURCE,
       generatedAt: new Date().toISOString(),
-      retentionStart: isoDate(cutoff),
-      order: 'date-descending-board-order-for-ties',
+      rollingMonths: ROLLING_MONTHS,
+      galleryStartDate: isoDate(galleryStartDate()),
+      order: 'board-visible-order-newest-first',
       count: domesticOnly.length,
       reviews: domesticOnly
     }, null, 2) + '\n',
     'utf8'
   );
 
-  console.log(`완료: ${isoDate(cutoff)} 이후 국산차 ${domesticOnly.length}건 저장 (새로 수집 ${fresh.length}건, 기존 보관 ${oldReviews.length}건)`);
+  console.log(`완료: ${isoDate(galleryStartDate())} 이후 국산차 후기 ${domesticOnly.length}건 저장 (메인 롤링은 최근 ${ROLLING_MONTHS}개월)`);
 } finally {
   await browser.close();
 }
